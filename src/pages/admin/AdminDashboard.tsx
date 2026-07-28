@@ -120,6 +120,13 @@ export function AdminDashboard() {
       ring: "ring-accent-100",
     },
     {
+      label: "Tentatives hors zone",
+      value: stats?.outOfZoneToday ?? 0,
+      icon: AlertTriangle,
+      color: "bg-error-50 text-error-600",
+      ring: "ring-error-100",
+    },
+    {
       label: "Dernière visite",
       value: stats?.lastVisite ? formatRelative(stats.lastVisite) : "Aucune",
       icon: Clock,
@@ -136,7 +143,7 @@ export function AdminDashboard() {
       </div>
 
       {/* Stats cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map((card, i) => (
           <div key={i} className={`card p-5 ring-1 ${card.ring}`}>
             <div className="flex items-center justify-between">

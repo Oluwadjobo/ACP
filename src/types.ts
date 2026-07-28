@@ -43,6 +43,7 @@ export interface Visite {
 export interface DashboardStats {
   totalCommerciaux: number;
   visitesToday: number;
+  outOfZoneToday: number;
   lastVisite: string | null;
 }
 

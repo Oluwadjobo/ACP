@@ -335,6 +335,12 @@ async function handleRoute(req: Request): Promise<Response> {
         .select("*", { count: "exact", head: true })
         .gte("visited_at", todayStart.toISOString());
 
+      const { count: outOfZoneToday } = await supabase
+        .from("visites")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "out_of_zone")
+        .gte("visited_at", todayStart.toISOString());
+
       const { data: lastVisite } = await supabase
         .from("visites")
         .select("visited_at")
@@ -345,6 +351,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({
         totalCommerciaux: totalCommerciaux || 0,
         visitesToday: visitesToday || 0,
+        outOfZoneToday: outOfZoneToday || 0,
         lastVisite: lastVisite?.visited_at || null,
       });
     }
@@ -407,6 +414,16 @@ async function handleRoute(req: Request): Promise<Response> {
       );
 
       if (distance > MAX_DISTANCE_METERS) {
+        await supabase
+          .from("visites")
+          .insert({
+            commercial_id: commercialId,
+            point_vente_id,
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+            distance_meters: distance,
+            status: "out_of_zone",
+          });
         return jsonResponse(
           {
             status: "out_of_zone",
