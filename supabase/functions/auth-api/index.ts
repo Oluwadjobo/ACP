@@ -15,7 +15,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
-const MAX_DISTANCE_METERS = 50;
+const MAX_DISTANCE_METERS = 10;
 
 // ============ CRYPTO HELPERS ============
 

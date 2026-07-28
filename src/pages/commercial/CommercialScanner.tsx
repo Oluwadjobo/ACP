@@ -299,7 +299,7 @@ export function CommercialScanner() {
                     </span>
                     <span className="font-bold text-error-600">{result.distance} m</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 50 mètres.</p>
+                  <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 10 mètres.</p>
                 </div>
                 <button onClick={reset} className="btn-primary w-full">
                   <ScanLine size={18} />
