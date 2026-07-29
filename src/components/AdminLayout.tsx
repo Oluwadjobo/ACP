@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 interface NavItem {
@@ -11,6 +11,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: "/admin", label: "Tableau de bord", icon: LayoutDashboard },
+  { path: "/admin/carte", label: "Carte", icon: MapIcon },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users },
   { path: "/admin/superviseurs", label: "Superviseurs", icon: UserCog },
   { path: "/admin/admins", label: "Administrateurs", icon: Shield },

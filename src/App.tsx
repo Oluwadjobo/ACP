@@ -9,6 +9,7 @@ import { AdminSuperviseurs } from "@/pages/admin/AdminSuperviseurs";
 import { AdminAdmins } from "@/pages/admin/AdminAdmins";
 import { AdminProduits } from "@/pages/admin/AdminProduits";
 import { AdminPointsVente } from "@/pages/admin/AdminPointsVente";
+import { AdminCarte } from "@/pages/admin/AdminCarte";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import type { UserType } from "@/types";
@@ -56,6 +57,7 @@ function AppRoutes() {
 
       {/* Admin routes */}
       <Route path="/admin" element={<ProtectedRoute allow="admin"><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/carte" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCarte /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/admins" element={<ProtectedRoute allow="admin"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
