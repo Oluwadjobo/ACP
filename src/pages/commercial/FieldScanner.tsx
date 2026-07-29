@@ -424,6 +424,12 @@ export function FieldScanner() {
                     <span className="font-bold text-error-600">{result.distance} m</span>
                   </div>
                   <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 30 mètres.</p>
+                  {result.debug && (
+                    <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 space-y-0.5">
+                      <p>Votre position : {result.debug.userLat.toFixed(6)}, {result.debug.userLon.toFixed(6)}</p>
+                      <p>Point de vente : {result.debug.pointLat.toFixed(6)}, {result.debug.pointLon.toFixed(6)}</p>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <button onClick={retryGps} disabled={retrying} className="btn-primary w-full">

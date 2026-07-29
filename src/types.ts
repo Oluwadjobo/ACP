@@ -110,6 +110,13 @@ export interface VisitResult {
     vente_status: string | null;
   };
   lastVisit?: string;
+  debug?: {
+    userLat: number;
+    userLon: number;
+    pointLat: number;
+    pointLon: number;
+    pointName: string | null;
+  };
 }
 
 export const VENTE_MOTIFS = [

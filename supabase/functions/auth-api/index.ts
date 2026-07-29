@@ -702,6 +702,13 @@ async function handleRoute(req: Request): Promise<Response> {
             status: "out_of_zone",
             distance,
             message: "Vous êtes trop éloigné du point de vente. Approchez-vous à moins de 30 mètres pour enregistrer votre présence.",
+            debug: {
+              userLat: Number(latitude),
+              userLon: Number(longitude),
+              pointLat: pv.latitude,
+              pointLon: pv.longitude,
+              pointName: (pv as Record<string, unknown>).name || null,
+            },
           },
           200
         );
@@ -709,21 +716,20 @@ async function handleRoute(req: Request): Promise<Response> {
 
       // Double-scan prevention: check for a visit in the last 5 minutes
       const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
-      const dedupQuery = supabase
+      let dedupQuery = supabase
         .from("visites")
         .select("id, visited_at")
         .eq("point_vente_id", point_vente_id)
         .gte("visited_at", fiveMinAgo)
         .order("visited_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
 
       if (userRole === "commercial") {
-        dedupQuery.eq("commercial_id", userId);
+        dedupQuery = dedupQuery.eq("commercial_id", userId);
       } else {
-        dedupQuery.eq("superviseur_id", userId);
+        dedupQuery = dedupQuery.eq("superviseur_id", userId);
       }
-      const { data: recent } = await dedupQuery;
+      const { data: recent } = await dedupQuery.maybeSingle();
 
       if (recent) {
         return jsonResponse(
@@ -755,7 +761,9 @@ async function handleRoute(req: Request): Promise<Response> {
         .select("id, visited_at, distance_meters, status, vente_status")
         .maybeSingle();
 
-      if (insertError) return jsonError(500, "Erreur lors de l'enregistrement");
+      if (insertError) {
+        return jsonError(500, `Erreur lors de l'enregistrement: ${insertError.message}`);
+      }
       return jsonResponse(
         { status: "confirmed", distance, visit },
         201
@@ -850,7 +858,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MY VISITS (history) ---
     if (path === "/mes-visites" && method === "GET") {
-      const query = supabase
+      let query = supabase
         .from("visites")
         .select(
           `id, visited_at, distance_meters, status, vente_status, motif, user_role,
@@ -859,9 +867,9 @@ async function handleRoute(req: Request): Promise<Response> {
         .order("visited_at", { ascending: false });
 
       if (userRole === "commercial") {
-        query.eq("commercial_id", userId);
+        query = query.eq("commercial_id", userId);
       } else {
-        query.eq("superviseur_id", userId);
+        query = query.eq("superviseur_id", userId);
       }
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
