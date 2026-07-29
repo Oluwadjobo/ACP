@@ -1,11 +1,12 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VisitResult, Produit, VenteStatus } from "@/types";
 import { VENTE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
+import { getAccuratePosition } from "@/lib/gps";
 
 type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
 type PostAction = "vente_realisee" | "vente_non_realisee" | "promesse_achat" | null;
@@ -40,6 +41,7 @@ export function FieldScanner() {
   const [motif, setMotif] = useState("");
   const [motifAutre, setMotifAutre] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -98,13 +100,11 @@ export function FieldScanner() {
       setPointName(point.name);
       setPointId(point.id);
 
-      setGpsStatus("Récupération de votre position GPS...");
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-      });
+      setGpsStatus("Récupération de votre position GPS (haute précision)...");
+      const position = await getAccuratePosition(20000, 15);
 
-      setGpsStatus("Validation de la position...");
-      const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.coords.latitude, longitude: position.coords.longitude });
+      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude });
 
       setResult(visitResult);
       setGpsStatus(null);
@@ -128,6 +128,33 @@ export function FieldScanner() {
     setResult(null); setPointName(null); setPointId(null); setError(null); setGpsStatus(null);
     setState("idle"); scannedRef.current = false;
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
+    setRetrying(false);
+  };
+
+  const retryGps = async () => {
+    if (!pointId) return;
+    setRetrying(true);
+    setError(null);
+    setGpsStatus("Nouvelle tentative GPS (haute précision)...");
+    try {
+      const position = await getAccuratePosition(20000, 15);
+      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      const visitResult = await api.recordVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude });
+      setResult(visitResult);
+      setGpsStatus(null);
+      if (visitResult.status === "confirmed") {
+        setState("action");
+        if (isSuperviseur) {
+          try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
+        }
+      }
+    } catch (err) {
+      if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
+      else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
+    } finally {
+      setRetrying(false);
+      setGpsStatus(null);
+    }
   };
 
   useEffect(() => { return () => stopCamera(); }, [stopCamera]);
@@ -398,7 +425,12 @@ export function FieldScanner() {
                   </div>
                   <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 30 mètres.</p>
                 </div>
-                <button onClick={reset} className="btn-primary w-full"><ScanLine size={18} /> Recommencer</button>
+                <div className="space-y-2">
+                  <button onClick={retryGps} disabled={retrying} className="btn-primary w-full">
+                    {retrying ? <><Loader2 size={18} className="animate-spin" /> Nouvelle tentative GPS...</> : <><MapPin size={18} /> Réessayer avec le GPS</>}
+                  </button>
+                  <button onClick={reset} disabled={retrying} className="btn-secondary w-full"><ScanLine size={18} /> Scanner un autre point</button>
+                </div>
               </div>
             )}
 

@@ -5,6 +5,7 @@ import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download } from "l
 import { api } from "@/lib/api";
 import type { PointVente } from "@/types";
 import { Modal } from "@/components/Modal";
+import { getAccuratePosition } from "@/lib/gps";
 
 export function AdminPointsVente() {
   const [points, setPoints] = useState<PointVente[]>([]);
@@ -145,20 +146,19 @@ function PointVenteModal({
     }
   }, [open, editing]);
 
-  const useMyGps = () => {
+  const useMyGps = async () => {
     setGettingGps(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLatitude(pos.coords.latitude.toFixed(6));
-        setLongitude(pos.coords.longitude.toFixed(6));
-        setGettingGps(false);
-      },
-      () => {
-        showToast("error", "Impossible d'obtenir votre position GPS");
-        setGettingGps(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
+    showToast("success", "GPS en cours : restez immobile jusqu'à 20 s pour une précision optimale");
+    try {
+      const pos = await getAccuratePosition(20000, 10);
+      setLatitude(pos.latitude.toFixed(6));
+      setLongitude(pos.longitude.toFixed(6));
+      showToast("success", `Position captée (précision ±${Math.round(pos.accuracy)} m)`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
+    } finally {
+      setGettingGps(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
