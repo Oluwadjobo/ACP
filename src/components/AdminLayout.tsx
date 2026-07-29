@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 interface NavItem {
@@ -12,6 +12,9 @@ interface NavItem {
 const navItems: NavItem[] = [
   { path: "/admin", label: "Tableau de bord", icon: LayoutDashboard },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users },
+  { path: "/admin/superviseurs", label: "Superviseurs", icon: UserCog },
+  { path: "/admin/admins", label: "Administrateurs", icon: Shield },
+  { path: "/admin/produits", label: "Produits", icon: Package },
   { path: "/admin/points-vente", label: "Points de vente", icon: Store },
 ];
 
@@ -38,7 +41,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <p className="text-primary-300 text-xs">Espace Administrateur</p>
           </div>
         </div>
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const active = location.pathname === item.path;
             return (
@@ -86,20 +89,20 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </button>
       </div>
 
-      {/* Mobile bottom nav */}
-      <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-gray-200 flex">
+      {/* Mobile bottom nav - scrollable */}
+      <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-gray-200 flex overflow-x-auto scrollbar-thin">
         {navItems.map((item) => {
           const active = location.pathname === item.path;
           return (
             <button
               key={item.path}
               onClick={() => navigate(item.path)}
-              className={`flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${
+              className={`flex-1 min-w-[64px] flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${
                 active ? "text-primary-700" : "text-gray-400"
               }`}
             >
               <item.icon size={22} />
-              {item.label}
+              <span className="truncate">{item.label}</span>
             </button>
           );
         })}

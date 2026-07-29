@@ -7,12 +7,19 @@ interface AuthState {
   userType: UserType | null;
   fullName: string | null;
   userId: string | null;
+  mustChangePassword: boolean;
   loading: boolean;
 }
 
 interface AuthContextValue extends AuthState {
-  login: (credentials: { login: string; password: string }) => Promise<void>;
+  login: (credentials: { login: string; password: string }) => Promise<LoginResult>;
   logout: () => Promise<void>;
+  clearMustChangePassword: () => void;
+}
+
+interface LoginResult {
+  userType: string;
+  mustChangePassword?: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -23,6 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     userType: null,
     fullName: null,
     userId: null,
+    mustChangePassword: false,
     loading: true,
   });
 
@@ -40,16 +48,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userType: data.userType as UserType,
           fullName: data.fullName,
           userId: data.userId,
+          mustChangePassword: false,
           loading: false,
         });
       })
       .catch(() => {
         localStorage.removeItem("session_token");
-        setState({ token: null, userType: null, fullName: null, userId: null, loading: false });
+        setState({ token: null, userType: null, fullName: null, userId: null, mustChangePassword: false, loading: false });
       });
   }, []);
 
-  const login = async (credentials: { login: string; password: string }) => {
+  const login = async (credentials: { login: string; password: string }): Promise<LoginResult> => {
     const data = await api.login(credentials);
     localStorage.setItem("session_token", data.token);
     setState({
@@ -57,8 +66,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userType: data.userType as UserType,
       fullName: data.fullName,
       userId: data.userId,
+      mustChangePassword: data.mustChangePassword ?? false,
       loading: false,
     });
+    return { userType: data.userType, mustChangePassword: data.mustChangePassword };
   };
 
   const logout = async () => {
@@ -68,11 +79,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore
     }
     localStorage.removeItem("session_token");
-    setState({ token: null, userType: null, fullName: null, userId: null, loading: false });
+    setState({ token: null, userType: null, fullName: null, userId: null, mustChangePassword: false, loading: false });
+  };
+
+  const clearMustChangePassword = () => {
+    setState((s) => ({ ...s, mustChangePassword: false }));
   };
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout }}>
+    <AuthContext.Provider value={{ ...state, login, logout, clearMustChangePassword }}>
       {children}
     </AuthContext.Provider>
   );

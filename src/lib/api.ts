@@ -43,16 +43,25 @@ async function apiRequest<T>(
 export const api = {
   // Auth
   login: (body: { login: string; password: string }) =>
-    apiRequest<{ token: string; userType: string; fullName: string; userId: string }>(
-      "/login",
-      { method: "POST", body: JSON.stringify(body) }
-    ),
+    apiRequest<{
+      token: string;
+      userType: string;
+      fullName: string;
+      userId: string;
+      mustChangePassword?: boolean;
+    }>("/login", { method: "POST", body: JSON.stringify(body) }),
 
   logout: () => apiRequest<{ success: boolean }>("/logout", { method: "POST" }),
 
   me: () =>
     apiRequest<{ userType: string; userId: string; fullName: string }>("/me", {
       method: "GET",
+    }),
+
+  changePassword: (newPassword: string) =>
+    apiRequest<{ success: boolean }>("/change-password", {
+      method: "POST",
+      body: JSON.stringify({ newPassword }),
     }),
 
   // Admin - Commerciaux
@@ -80,6 +89,72 @@ export const api = {
 
   deleteCommercial: (id: string) =>
     apiRequest<{ success: boolean }>(`/commerciaux/${id}`, { method: "DELETE" }),
+
+  // Admin - Superviseurs
+  listSuperviseurs: () => apiRequest<import("@/types").Superviseur[]>("/superviseurs", {
+    method: "GET",
+  }),
+
+  createSuperviseur: (body: { identifiant: string; full_name: string; password: string }) =>
+    apiRequest<import("@/types").Superviseur>("/superviseurs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean }>) =>
+    apiRequest<import("@/types").Superviseur>(`/superviseurs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetSuperviseurPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/superviseurs/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteSuperviseur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/superviseurs/${id}`, { method: "DELETE" }),
+
+  // Admin - Admins
+  listAdmins: () => apiRequest<import("@/types").AdminUser[]>("/admins", {
+    method: "GET",
+  }),
+
+  createAdmin: (body: { email: string; full_name: string; password: string }) =>
+    apiRequest<import("@/types").AdminUser>("/admins", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAdmin: (id: string, body: Partial<{ email: string; full_name: string }>) =>
+    apiRequest<import("@/types").AdminUser>(`/admins/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetAdminPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/admins/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteAdmin: (id: string) =>
+    apiRequest<{ success: boolean }>(`/admins/${id}`, { method: "DELETE" }),
+
+  // Admin - Produits
+  listProduits: () => apiRequest<import("@/types").Produit[]>("/produits", {
+    method: "GET",
+  }),
+
+  createProduit: (nom: string) =>
+    apiRequest<import("@/types").Produit>("/produits", {
+      method: "POST",
+      body: JSON.stringify({ nom }),
+    }),
+
+  deleteProduit: (id: string) =>
+    apiRequest<{ success: boolean }>(`/produits/${id}`, { method: "DELETE" }),
 
   // Admin - Points de vente
   listPointsVente: () => apiRequest<import("@/types").PointVente[]>("/points-vente", {
@@ -121,7 +196,13 @@ export const api = {
       { method: "GET" }
     ),
 
-  // Commercial
+  listPromesses: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").PromesseAchat[]; count: number; page: number; pageSize: number }>(
+      `/promesses?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  // Field - Shared
   resolveQr: (qr_token: string) =>
     apiRequest<{ id: string; name: string; address: string; city: string; latitude: number; longitude: number }>(
       "/resolve-qr",
@@ -130,6 +211,27 @@ export const api = {
 
   recordVisit: (body: { point_vente_id: string; latitude: number; longitude: number }) =>
     apiRequest<import("@/types").VisitResult>("/visites", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  finalizeVisit: (body: { visite_id: string; vente_status: string; motif?: string }) =>
+    apiRequest<{ success: boolean; visite_id: string; vente_status: string }>("/visites/finalize", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  createPromesse: (body: {
+    visite_id: string;
+    point_vente_id: string;
+    produits: string[];
+    quantite: number;
+    date_previsionnelle?: string;
+    montant_estime?: number;
+    responsable?: string;
+    observations?: string;
+  }) =>
+    apiRequest<{ id: string; created_at: string }>("/promesses", {
       method: "POST",
       body: JSON.stringify(body),
     }),

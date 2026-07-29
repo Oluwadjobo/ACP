@@ -54,7 +54,7 @@ export function LoginPage() {
           <div className="space-y-3">
             {[
               { icon: ScanLine, text: "Scan QR Code via caméra du téléphone" },
-              { icon: MapPin, text: "Validation GPS à moins de 10 mètres" },
+              { icon: MapPin, text: "Validation GPS à moins de 30 mètres" },
               { icon: Shield, text: "Données chiffrées et sécurisées" },
             ].map((item, i) => (
               <div key={i} className="flex items-center gap-3 text-primary-100">
