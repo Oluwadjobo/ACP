@@ -125,16 +125,30 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
 async function getCommercialSecteur(commercialId: string): Promise<{ secteur_id: string | null; superviseur_id: string | null }> {
   const { data } = await supabase
     .from("commerciaux")
-    .select("superviseur_id, superviseurs(secteur_id)")
+    .select("superviseur_id")
     .eq("id", commercialId)
     .maybeSingle();
   const superviseur_id = data?.superviseur_id ?? null;
-  const secteur_id = (data?.superviseurs as Record<string, unknown> | null)?.secteur_id as string | null ?? null;
+  let secteur_id: string | null = null;
+  if (superviseur_id) {
+    const { data: tlt } = await supabase
+      .from("team_leader_tournees")
+      .select("secteur_id")
+      .eq("superviseur_id", superviseur_id)
+      .limit(1)
+      .maybeSingle();
+    secteur_id = tlt?.secteur_id ?? null;
+  }
   return { secteur_id, superviseur_id };
 }
 
 async function getSuperviseurSecteur(superviseurId: string): Promise<string | null> {
-  const { data } = await supabase.from("superviseurs").select("secteur_id").eq("id", superviseurId).maybeSingle();
+  const { data } = await supabase
+    .from("team_leader_tournees")
+    .select("secteur_id")
+    .eq("superviseur_id", superviseurId)
+    .limit(1)
+    .maybeSingle();
   return data?.secteur_id ?? null;
 }
 
@@ -260,13 +274,14 @@ async function handleRoute(req: Request): Promise<Response> {
         .from("commerciaux").select("id, identifiant, full_name, active, telephone, superviseur_id, created_at, updated_at")
         .order("created_at", { ascending: false });
       if (error) return jsonError(500, "Erreur de lecture");
-      // Enrich with superviseur name
+      // Enrich with superviseur name and first tournée
       const enriched = await Promise.all((data || []).map(async (c: Record<string, unknown>) => {
         let superviseur_nom = null, secteur_nom = null;
         if (c.superviseur_id) {
-          const { data: sup } = await supabase.from("superviseurs").select("full_name, secteur_id, secteurs(nom)").eq("id", c.superviseur_id).maybeSingle();
+          const { data: sup } = await supabase.from("superviseurs").select("full_name").eq("id", c.superviseur_id).maybeSingle();
           superviseur_nom = sup?.full_name ?? null;
-          secteur_nom = (sup?.secteurs as Record<string, unknown> | null)?.nom ?? null;
+          const { data: tlt } = await supabase.from("team_leader_tournees").select("secteurs(nom)").eq("superviseur_id", c.superviseur_id).limit(1).maybeSingle();
+          secteur_nom = (tlt?.secteurs as Record<string, unknown> | null)?.nom ?? null;
         }
         return { ...c, superviseur_nom, secteur_nom };
       }));
@@ -318,30 +333,34 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- SUPERVISEURS CRUD ---
     if (path === "/superviseurs" && method === "GET") {
       const { data, error } = await supabase
-        .from("superviseurs").select("id, identifiant, full_name, active, telephone, secteur_id, created_at, updated_at")
+        .from("superviseurs").select("id, identifiant, full_name, active, telephone, created_at, updated_at")
         .order("created_at", { ascending: false });
       if (error) return jsonError(500, "Erreur de lecture");
       const enriched = await Promise.all((data || []).map(async (s: Record<string, unknown>) => {
-        let secteur_nom = null;
-        if (s.secteur_id) {
-          const { data: sec } = await supabase.from("secteurs").select("nom").eq("id", s.secteur_id).maybeSingle();
-          secteur_nom = sec?.nom ?? null;
-        }
-        return { ...s, secteur_nom };
+        const { data: tlt } = await supabase
+          .from("team_leader_tournees").select("secteur_id, secteurs(nom, code)").eq("superviseur_id", s.id);
+        const tournees = (tlt || []).map((t: Record<string, unknown>) => ({
+          secteur_id: t.secteur_id,
+          nom: (t.secteurs as Record<string, unknown> | null)?.nom ?? null,
+          code: (t.secteurs as Record<string, unknown> | null)?.code ?? null,
+        }));
+        return { ...s, tournees };
       }));
       return jsonResponse(enriched);
     }
     if (path === "/superviseurs" && method === "POST") {
-      const { identifiant, full_name, password, telephone, secteur_id } = await req.json();
+      const { identifiant, full_name, password, telephone, secteur_ids } = await req.json();
       if (!identifiant || !full_name || !password) return jsonError(400, "Identifiant, nom et mot de passe requis");
       if (password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
-      if (!secteur_id) return jsonError(400, "Un secteur affecté est obligatoire");
+      if (!Array.isArray(secteur_ids) || secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       const password_hash = await hashPassword(password);
       const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
       if (telephone) insertData.telephone = telephone.trim();
-      if (secteur_id) insertData.secteur_id = secteur_id;
-      const { data, error } = await supabase.from("superviseurs").insert(insertData).select("id, identifiant, full_name, active, telephone, secteur_id, created_at").maybeSingle();
+      const { data, error } = await supabase.from("superviseurs").insert(insertData).select("id, identifiant, full_name, active, telephone, created_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la création"); }
+      const tltData = secteur_ids.map((sid: string) => ({ superviseur_id: data.id, secteur_id: sid }));
+      await supabase.from("team_leader_tournees").insert(tltData);
+      if (secteur_ids.length > 0) await supabase.from("superviseurs").update({ secteur_id: secteur_ids[0] }).eq("id", data.id);
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/superviseurs/") && method === "PUT") {
@@ -352,10 +371,19 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.identifiant !== undefined) updates.identifiant = body.identifiant.trim();
       if (body.active !== undefined) updates.active = body.active;
       if (body.telephone !== undefined) updates.telephone = body.telephone?.trim() || null;
-      if (body.secteur_id !== undefined) updates.secteur_id = body.secteur_id || null;
-      const { data, error } = await supabase.from("superviseurs").update(updates).eq("id", id).select("id, identifiant, full_name, active, telephone, secteur_id, created_at, updated_at").maybeSingle();
+      if (body.secteur_ids !== undefined && Array.isArray(body.secteur_ids)) {
+        await supabase.from("team_leader_tournees").delete().eq("superviseur_id", id);
+        if (body.secteur_ids.length > 0) {
+          const tltData = body.secteur_ids.map((sid: string) => ({ superviseur_id: id, secteur_id: sid }));
+          await supabase.from("team_leader_tournees").insert(tltData);
+          updates.secteur_id = body.secteur_ids[0];
+        } else {
+          updates.secteur_id = null;
+        }
+      }
+      const { data, error } = await supabase.from("superviseurs").update(updates).eq("id", id).select("id, identifiant, full_name, active, telephone, created_at, updated_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la modification"); }
-      if (!data) return jsonError(404, "Superviseur introuvable");
+      if (!data) return jsonError(404, "Team Leader introuvable");
       return jsonResponse(data);
     }
     if (path.startsWith("/superviseurs/") && path.endsWith("/reset-password") && method === "POST") {

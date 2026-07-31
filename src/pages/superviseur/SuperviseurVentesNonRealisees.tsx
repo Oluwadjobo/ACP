@@ -53,7 +53,7 @@ export function SuperviseurVentesNonRealisees() {
         });
         showToast("success", "Promesse d'achat enregistrée");
       } else {
-        await api.finalizeVisit({ visite_id: selected.id, vente_status: "vente_non_realisee", motif: observations || "Refus confirmé par le superviseur" });
+        await api.finalizeVisit({ visite_id: selected.id, vente_status: "vente_non_realisee", motif: observations || "Refus confirmé par le Team Leader" });
         showToast("success", "Refus confirmé");
       }
       setSelected(null);

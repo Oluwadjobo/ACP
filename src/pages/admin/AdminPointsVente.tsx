@@ -205,9 +205,9 @@ function PointVenteModal({
           <input className="input" value={city} onChange={(e) => setCity(e.target.value)} required placeholder="Paris" />
         </div>
         <div>
-          <label className="label">Secteur</label>
+          <label className="label">Tournée</label>
           <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)}>
-            <option value="">Aucun secteur</option>
+            <option value="">Aucune tournée</option>
             {secteurs.filter(s => s.actif).map((s) => (
               <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
             ))}

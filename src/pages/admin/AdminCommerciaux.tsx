@@ -225,7 +225,7 @@ function CommercialModal({
     setSaving(true);
     try {
       if (!superviseurId) {
-        showToast("error", "Un superviseur de rattachement est obligatoire");
+        showToast("error", "Un Team Leader de rattachement est obligatoire");
         setSaving(false);
         return;
       }
@@ -277,14 +277,14 @@ function CommercialModal({
           <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+229 ..." />
         </div>
         <div>
-          <label className="label">Superviseur de rattachement *</label>
+          <label className="label">Team Leader de rattachement *</label>
           <select className="input" value={superviseurId} onChange={(e) => setSuperviseurId(e.target.value)} required>
-            <option value="">Sélectionner un superviseur...</option>
+            <option value="">Sélectionner un Team Leader...</option>
             {superviseurs.filter(s => s.active).map((s) => (
               <option key={s.id} value={s.id}>{s.full_name}{s.secteur_nom ? ` — ${s.secteur_nom}` : ""}</option>
             ))}
           </select>
-          {superviseurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucun superviseur actif. Créez d'abord un superviseur.</p>}
+          {superviseurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucun Team Leader actif. Créez d'abord un Team Leader.</p>}
         </div>
         {!editing && (
           <div>

@@ -212,7 +212,7 @@ export function FieldScanner() {
   const historyPath = isSuperviseur ? "/superviseur/historique" : "/commercial/historique";
   const ventesNonRealiseesPath = "/superviseur/ventes-non-realisees";
   const controleTerrainPath = "/superviseur/controle-terrain";
-  const roleLabel = isSuperviseur ? "Superviseur" : "Commercial";
+  const roleLabel = isSuperviseur ? "Team Leader" : "Commercial";
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

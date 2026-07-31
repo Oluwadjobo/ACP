@@ -55,7 +55,7 @@ export function AdminDashboard() {
       const escapeCSV = (val: string | number) => { const s = String(val); return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s; };
       const rows = all.map((v) => [
         escapeCSV(v.commercial?.full_name || v.superviseur?.full_name || ""),
-        escapeCSV(v.user_role === "superviseur" ? "Superviseur" : "Commercial"),
+        escapeCSV(v.user_role === "superviseur" ? "Team Leader" : "Commercial"),
         escapeCSV(v.point_vente?.name || ""),
         escapeCSV(v.point_vente?.city || ""),
         escapeCSV(v.point_vente?.address || ""),
@@ -78,7 +78,7 @@ export function AdminDashboard() {
       const cells = (row: string[]) => row.map((c) => `<Cell><Data ss:Type="String">${escapeXML(c)}</Data></Cell>`).join("");
       const dataRows = all.map((v) => cells([
         v.commercial?.full_name || v.superviseur?.full_name || "",
-        v.user_role === "superviseur" ? "Superviseur" : "Commercial",
+        v.user_role === "superviseur" ? "Team Leader" : "Commercial",
         v.point_vente?.name || "", v.point_vente?.city || "", v.point_vente?.address || "",
         formatDate(v.visited_at), formatTime(v.visited_at),
         String(v.latitude), String(v.longitude), String(Math.round(v.distance_meters)),
@@ -95,8 +95,8 @@ export function AdminDashboard() {
 
   const statCards = [
     { label: "Commerciaux actifs", value: stats?.totalCommerciaux ?? 0, icon: Users, color: "bg-primary-50 text-primary-700", ring: "ring-primary-100" },
-    { label: "Superviseurs actifs", value: stats?.totalSuperviseurs ?? 0, icon: UserCog, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
-    { label: "Secteurs", value: stats?.totalSecteurs ?? 0, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
+    { label: "Team Leaders actifs", value: stats?.totalSuperviseurs ?? 0, icon: UserCog, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
+    { label: "Tournées", value: stats?.totalSecteurs ?? 0, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
     { label: "Points de vente", value: stats?.totalPointsVente ?? 0, icon: Store, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
     { label: "Visites aujourd'hui", value: stats?.visitesToday ?? 0, icon: CalendarCheck, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
     { label: "Ventes réalisées", value: stats?.ventesRealisees ?? 0, icon: TrendingUp, color: "bg-success-50 text-success-600", ring: "ring-success-100" },
@@ -229,7 +229,7 @@ function VisitRow({ visite, statusLabel }: { visite: Visite; statusLabel: string
         <div className="flex items-center gap-2 flex-wrap">
           <p className="font-semibold text-gray-900 text-sm">{visite.commercial?.full_name || visite.superviseur?.full_name || "—"}</p>
           <span className={`badge ${badgeColor}`}>{statusLabel}</span>
-          <span className="badge bg-gray-100 text-gray-500">{visite.user_role === "superviseur" ? "Superviseur" : "Commercial"}</span>
+          <span className="badge bg-gray-100 text-gray-500">{visite.user_role === "superviseur" ? "Team Leader" : "Commercial"}</span>
         </div>
         <div className="flex items-center gap-1.5 text-sm text-gray-500 mt-1">
           <Store size={14} /><span className="truncate">{visite.point_vente?.name}</span>

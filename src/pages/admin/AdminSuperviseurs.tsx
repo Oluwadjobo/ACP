@@ -45,8 +45,8 @@ export function AdminSuperviseurs() {
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Superviseurs</h1>
-          <p className="text-gray-500 text-sm mt-1">Gérez les comptes superviseurs terrain</p>
+          <h1 className="text-2xl font-bold text-gray-900">Team Leaders</h1>
+          <p className="text-gray-500 text-sm mt-1">Gérez les comptes des Team Leaders terrain</p>
         </div>
         <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary">
           <UserPlus size={18} />
@@ -69,7 +69,7 @@ export function AdminSuperviseurs() {
             <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
               <UserCog size={26} className="text-gray-400" />
             </div>
-            <p className="text-gray-500 text-sm">Aucun superviseur trouvé</p>
+            <p className="text-gray-500 text-sm">Aucun Team Leader trouvé</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
@@ -86,7 +86,13 @@ export function AdminSuperviseurs() {
                     </span>
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5">Identifiant : {s.identifiant}{s.telephone ? ` — ${s.telephone}` : ""}</p>
-                  {s.secteur_nom && <span className="badge bg-primary-50 text-primary-600 mt-1">{s.secteur_nom}</span>}
+                  {s.tournees && s.tournees.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {s.tournees.map((t) => (
+                        <span key={t.secteur_id} className="badge bg-primary-50 text-primary-600">{t.nom}</span>
+                      ))}
+                    </div>
+                  )}
                   <p className="text-xs text-gray-400 mt-0.5">Créé le {formatDate(s.created_at)}</p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -103,7 +109,7 @@ export function AdminSuperviseurs() {
       <SuperviseurModal open={modalOpen} editing={editing} onClose={() => setModalOpen(false)} onSaved={() => { setModalOpen(false); load(); }} showToast={showToast} />
       <PasswordModal superviseur={passwordModal} onClose={() => setPasswordModal(null)} onSaved={() => { setPasswordModal(null); showToast("success", "Mot de passe réinitialisé"); }} showToast={showToast} />
 
-      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Supprimer le superviseur" maxWidth="max-w-md">
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Supprimer le Team Leader" maxWidth="max-w-md">
         <p className="text-gray-600 text-sm mb-6">
           Êtes-vous sûr de vouloir supprimer <strong>{deleteTarget?.full_name}</strong> ?
           Cette action supprimera également tout l'historique de ses visites. Cette opération est irréversible.
@@ -113,7 +119,7 @@ export function AdminSuperviseurs() {
           <button
             onClick={async () => {
               if (!deleteTarget) return;
-              try { await api.deleteSuperviseur(deleteTarget.id); setDeleteTarget(null); load(); showToast("success", "Superviseur supprimé"); }
+              try { await api.deleteSuperviseur(deleteTarget.id); setDeleteTarget(null); load(); showToast("success", "Team Leader supprimé"); }
               catch { showToast("error", "Erreur lors de la suppression"); }
             }}
             className="btn-danger"
@@ -131,7 +137,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [telephone, setTelephone] = useState("");
-  const [secteurId, setSecteurId] = useState("");
+  const [secteurIds, setSecteurIds] = useState<string[]>([]);
   const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -139,7 +145,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
   useEffect(() => {
     if (open) {
       api.listSecteurs().then(setSecteurs).catch(() => {});
-      setIdentifiant(editing?.identifiant || ""); setFullName(editing?.full_name || ""); setPassword(""); setTelephone(editing?.telephone || ""); setSecteurId(editing?.secteur_id || ""); setActive(editing?.active ?? true);
+      setIdentifiant(editing?.identifiant || ""); setFullName(editing?.full_name || ""); setPassword(""); setTelephone(editing?.telephone || ""); setSecteurIds(editing?.tournees?.map(t => t.secteur_id) || (editing?.secteur_id ? [editing.secteur_id] : [])); setActive(editing?.active ?? true);
     }
   }, [open, editing]);
 
@@ -148,13 +154,13 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
     setSaving(true);
     try {
       if (editing) {
-        await api.updateSuperviseur(editing.id, { identifiant: identifiant.trim(), full_name: fullName.trim(), active, telephone: telephone.trim(), secteur_id: secteurId });
-        showToast("success", "Superviseur modifié");
+        await api.updateSuperviseur(editing.id, { identifiant: identifiant.trim(), full_name: fullName.trim(), active, telephone: telephone.trim(), secteur_ids: secteurIds });
+        showToast("success", "Team Leader modifié");
       } else {
         if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); setSaving(false); return; }
-        if (!secteurId) { showToast("error", "Un secteur est obligatoire"); setSaving(false); return; }
-        await api.createSuperviseur({ identifiant: identifiant.trim(), full_name: fullName.trim(), password, telephone: telephone.trim(), secteur_id: secteurId });
-        showToast("success", "Superviseur créé");
+        if (secteurIds.length === 0) { showToast("error", "Au moins une tournée est obligatoire"); setSaving(false); return; }
+        await api.createSuperviseur({ identifiant: identifiant.trim(), full_name: fullName.trim(), password, telephone: telephone.trim(), secteur_ids: secteurIds });
+        showToast("success", "Team Leader créé");
       }
       onSaved();
     } catch (err) { showToast("error", err instanceof Error ? err.message : "Erreur"); }
@@ -162,7 +168,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={editing ? "Modifier le superviseur" : "Nouveau superviseur"}>
+    <Modal open={open} onClose={onClose} title={editing ? "Modifier le Team Leader" : "Nouveau Team Leader"}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="label">Nom complet</label>
@@ -177,14 +183,24 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
           <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+229 ..." />
         </div>
         <div>
-          <label className="label">Secteur affecté *</label>
-          <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)} required>
-            <option value="">Sélectionner un secteur...</option>
+          <label className="label">Tournées affectées *</label>
+          <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin rounded-xl border border-gray-200 p-3">
             {secteurs.filter(s => s.actif).map((s) => (
-              <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
+              <label key={s.id} className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={secteurIds.includes(s.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) setSecteurIds([...secteurIds, s.id]);
+                    else setSecteurIds(secteurIds.filter(id => id !== s.id));
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-700">{s.nom} ({s.code})</span>
+              </label>
             ))}
-          </select>
-          {secteurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucun secteur actif. Créez d'abord un secteur.</p>}
+          </div>
+          {secteurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucune tournée active. Créez d'abord une tournée.</p>}
         </div>
         {!editing && (
           <div>
@@ -196,7 +212,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
           <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
             <div>
               <p className="text-sm font-medium text-gray-700">Statut du compte</p>
-              <p className="text-xs text-gray-500">{active ? "Le superviseur peut se connecter" : "Le superviseur ne peut plus se connecter"}</p>
+              <p className="text-xs text-gray-500">{active ? "Le Team Leader peut se connecter" : "Le Team Leader ne peut plus se connecter"}</p>
             </div>
             <button type="button" onClick={() => setActive(!active)} className={`relative w-12 h-6 rounded-full transition-colors ${active ? "bg-accent-500" : "bg-gray-300"}`}>
               <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${active ? "translate-x-6" : ""}`} />

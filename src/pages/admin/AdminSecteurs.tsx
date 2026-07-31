@@ -26,7 +26,7 @@ export function AdminSecteurs() {
   const handleToggle = async (s: Secteur) => {
     try {
       await api.updateSecteur(s.id, { actif: !s.actif });
-      showToast("success", s.actif ? "Secteur désactivé" : "Secteur réactivé");
+      showToast("success", s.actif ? "Tournée désactivée" : "Tournée réactivée");
       load();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Erreur");
@@ -34,10 +34,10 @@ export function AdminSecteurs() {
   };
 
   const handleDelete = async (s: Secteur) => {
-    if (!confirm(`Supprimer le secteur "${s.nom}" ? Cette action est irréversible.`)) return;
+    if (!confirm(`Supprimer la tournée "${s.nom}" ? Cette action est irréversible.`)) return;
     try {
       await api.deleteSecteur(s.id);
-      showToast("success", "Secteur supprimé");
+      showToast("success", "Tournée supprimée");
       load();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Erreur lors de la suppression");
@@ -56,10 +56,10 @@ export function AdminSecteurs() {
 
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><MapPin size={26} className="text-primary-700" /> Secteurs</h1>
-          <p className="text-gray-500 text-sm mt-1">Gérez les zones géographiques et portefeuilles commerciaux</p>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><MapPin size={26} className="text-primary-700" /> Tournées</h1>
+          <p className="text-gray-500 text-sm mt-1">Gérez les tournées assignées aux Team Leaders</p>
         </div>
-        <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary"><Plus size={18} /> Nouveau secteur</button>
+        <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary"><Plus size={18} /> Nouvelle tournée</button>
       </div>
 
       {loading ? (
@@ -67,8 +67,8 @@ export function AdminSecteurs() {
       ) : secteurs.length === 0 ? (
         <div className="card p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4"><MapPin size={28} className="text-gray-400" /></div>
-          <p className="text-gray-500 mb-4">Aucun secteur enregistré pour le moment</p>
-          <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary"><Plus size={18} /> Créer le premier secteur</button>
+          <p className="text-gray-500 mb-4">Aucune tournée enregistrée pour le moment</p>
+          <button onClick={() => { setEditing(null); setShowModal(true); }} className="btn-primary"><Plus size={18} /> Créer la première tournée</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -138,10 +138,10 @@ function SecteurModal({
     try {
       if (editing) {
         await api.updateSecteur(editing.id, { nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim() });
-        showToast("success", "Secteur modifié avec succès");
+        showToast("success", "Tournée modifiée avec succès");
       } else {
         await api.createSecteur({ nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim() });
-        showToast("success", "Secteur créé avec succès");
+        showToast("success", "Tournée créée avec succès");
       }
       onSaved();
     } catch (err) {
@@ -152,11 +152,11 @@ function SecteurModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={editing ? "Modifier le secteur" : "Nouveau secteur"} maxWidth="max-w-md">
+    <Modal open={open} onClose={onClose} title={editing ? "Modifier la tournée" : "Nouvelle tournée"} maxWidth="max-w-md">
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-3 text-sm text-error-700 flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
         <div>
-          <label className="label">Nom du secteur *</label>
+          <label className="label">Nom de la tournée *</label>
           <input className="input" value={nom} onChange={(e) => setNom(e.target.value)} placeholder="ex: Cotonou Centre" />
         </div>
         <div>

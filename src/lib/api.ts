@@ -95,13 +95,13 @@ export const api = {
     method: "GET",
   }),
 
-  createSuperviseur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; secteur_id?: string }) =>
+  createSuperviseur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; secteur_ids: string[] }) =>
     apiRequest<import("@/types").Superviseur>("/superviseurs", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; secteur_id: string | null }>) =>
+  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; secteur_ids: string[] }>) =>
     apiRequest<import("@/types").Superviseur>(`/superviseurs/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),

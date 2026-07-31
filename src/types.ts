@@ -29,6 +29,12 @@ export interface Commercial {
   updated_at?: string;
 }
 
+export interface SuperviseurTournee {
+  secteur_id: string;
+  nom: string | null;
+  code: string | null;
+}
+
 export interface Superviseur {
   id: string;
   identifiant: string;
@@ -37,6 +43,7 @@ export interface Superviseur {
   telephone?: string | null;
   secteur_id?: string | null;
   secteur_nom?: string | null;
+  tournees?: SuperviseurTournee[];
   created_at: string;
   updated_at?: string;
 }
