@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 interface NavItem {
