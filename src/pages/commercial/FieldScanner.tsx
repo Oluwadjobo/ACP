@@ -1,15 +1,17 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2 } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VisitResult, Produit, VenteStatus } from "@/types";
-import { VENTE_MOTIFS } from "@/types";
+import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { getAccuratePosition } from "@/lib/gps";
 
 type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
-type PostAction = "vente_realisee" | "vente_non_realisee" | "promesse_achat" | null;
+type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | "promesse_achat" | null;
+
+type VenteLigneForm = { produit_nom: string; quantite: number; prix_unitaire: number; observation: string };
 
 export function FieldScanner() {
   const { fullName, userType } = useAuth();
@@ -42,6 +44,10 @@ export function FieldScanner() {
   const [motifAutre, setMotifAutre] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // Multi-product vente
+  const [venteLignes, setVenteLignes] = useState<VenteLigneForm[]>([{ produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }]);
+  const [venteObservation, setVenteObservation] = useState("");
+  const [blNumero, setBlNumero] = useState<string | null>(null);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -128,6 +134,7 @@ export function FieldScanner() {
     setResult(null); setPointName(null); setPointId(null); setError(null); setGpsStatus(null);
     setState("idle"); scannedRef.current = false;
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
+    setVenteLignes([{ produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }]); setVenteObservation(""); setBlNumero(null);
     setRetrying(false);
   };
 
@@ -175,10 +182,22 @@ export function FieldScanner() {
           responsable: responsable || undefined,
           observations: observations || undefined,
         });
-      } else {
-        const finalMotif = postAction === "vente_non_realisee" ? (motif === "Autre" ? motifAutre : motif) : undefined;
-        if (postAction === "vente_non_realisee" && !finalMotif) { setSubmitting(false); return; }
+      } else if (postAction === "vente_non_realisee") {
+        const finalMotif = motif === "Autre" ? motifAutre : motif;
+        if (!finalMotif) { setSubmitting(false); return; }
         await api.finalizeVisit({ visite_id: result.visit.id, vente_status: postAction, motif: finalMotif });
+      } else if (postAction === "vente_realisee" || postAction === "vente_livraison") {
+        // Validate lignes
+        const validLignes = venteLignes.filter((l) => l.produit_nom.trim() && l.quantite > 0);
+        if (validLignes.length === 0) { setSubmitting(false); return; }
+        const res = await api.createVente({
+          visite_id: result.visit.id,
+          point_vente_id: pointId,
+          lignes: validLignes.map((l) => ({ produit_nom: l.produit_nom.trim(), quantite: l.quantite, prix_unitaire: l.prix_unitaire, observation: l.observation || undefined })),
+          livraison_immédiate: postAction === "vente_livraison",
+          observation: venteObservation || undefined,
+        });
+        if (res.bl_numero) setBlNumero(res.bl_numero);
       }
       setState("result");
       setResult({ ...result, status: "confirmed", visit: { ...result.visit!, vente_status: postAction } });
@@ -191,13 +210,23 @@ export function FieldScanner() {
 
   const homePath = isSuperviseur ? "/superviseur" : "/commercial";
   const historyPath = isSuperviseur ? "/superviseur/historique" : "/commercial/historique";
+  const ventesNonRealiseesPath = "/superviseur/ventes-non-realisees";
+  const controleTerrainPath = "/superviseur/controle-terrain";
   const roleLabel = isSuperviseur ? "Superviseur" : "Commercial";
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><ScanLine size={20} /><span className="font-bold text-sm">Contrôle Présence</span></div>
-        <button onClick={() => navigate(historyPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg"><History size={20} /></button>
+        <div className="flex items-center gap-1">
+          {isSuperviseur && (
+            <>
+              <button onClick={() => navigate(ventesNonRealiseesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Ventes non réalisées"><TrendingDown size={20} /></button>
+              <button onClick={() => navigate(controleTerrainPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Contrôle terrain"><ClipboardCheck size={20} /></button>
+            </>
+          )}
+          <button onClick={() => navigate(historyPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg"><History size={20} /></button>
+        </div>
       </header>
 
       <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3">
@@ -332,15 +361,59 @@ export function FieldScanner() {
               </div>
             )}
 
-            {/* Vente réalisée - confirm */}
-            {postAction === "vente_realisee" && (
-              <div className="card p-5 text-center">
-                <div className="w-16 h-16 rounded-full bg-success-50 flex items-center justify-center mx-auto mb-4"><TrendingUp size={36} className="text-success-600" /></div>
-                <p className="text-gray-600 text-sm mb-6">Confirmer l'enregistrement de cette vente comme réalisée ?</p>
-                {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700 mb-4">{error}</div>}
+            {/* Vente réalisée - multi-product form */}
+            {(postAction === "vente_realisee" || postAction === "vente_livraison") && (
+              <div className="card p-5 space-y-4">
+                <h2 className="font-bold text-gray-900 flex items-center gap-2">
+                  {postAction === "vente_livraison" ? <Truck size={20} className="text-blue-600" /> : <TrendingUp size={20} className="text-success-600" />}
+                  {postAction === "vente_livraison" ? "Vente et livraison" : "Vente réalisée"}
+                </h2>
+                <div className="space-y-3">
+                  {venteLignes.map((ligne, idx) => (
+                    <div key={idx} className="rounded-xl border border-gray-200 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-500">Produit {idx + 1}</span>
+                        {venteLignes.length > 1 && (
+                          <button onClick={() => setVenteLignes(venteLignes.filter((_, i) => i !== idx))} className="text-error-500 hover:bg-error-50 p-1 rounded">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                      <div>
+                        <label className="label text-xs">Nom du produit</label>
+                        <input list="produits-list" className="input" value={ligne.produit_nom} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, produit_nom: e.target.value }; setVenteLignes(next); }} placeholder="Nom du produit" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="label text-xs">Quantité</label>
+                          <input type="number" min={1} className="input" value={ligne.quantite} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, quantite: Number(e.target.value) }; setVenteLignes(next); }} />
+                        </div>
+                        <div>
+                          <label className="label text-xs">Prix unitaire (facultatif)</label>
+                          <input type="number" step="0.01" className="input" value={ligne.prix_unitaire} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, prix_unitaire: Number(e.target.value) }; setVenteLignes(next); }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="label text-xs">Observation (facultatif)</label>
+                        <input className="input" value={ligne.observation} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, observation: e.target.value }; setVenteLignes(next); }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setVenteLignes([...venteLignes, { produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }])} className="btn-secondary w-full text-sm flex items-center justify-center gap-1.5">
+                  <Plus size={16} /> Ajouter un produit
+                </button>
+                <div>
+                  <label className="label">Observation générale (facultatif)</label>
+                  <textarea className="input min-h-[60px]" value={venteObservation} onChange={(e) => setVenteObservation(e.target.value)} />
+                </div>
+                <datalist id="produits-list">
+                  {produits.map((p) => <option key={p.id} value={p.nom} />)}
+                </datalist>
+                {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700">{error}</div>}
                 <div className="flex gap-3">
                   <button onClick={() => { setPostAction(null); setError(null); }} className="btn-secondary flex-1">Retour</button>
-                  <button onClick={handlePostAction} disabled={submitting} className="btn-primary flex-1">{submitting ? "..." : "Confirmer"}</button>
+                  <button onClick={handlePostAction} disabled={submitting || venteLignes.every((l) => !l.produit_nom.trim())} className="btn-primary flex-1">{submitting ? "Enregistrement..." : "Valider"}</button>
                 </div>
               </div>
             )}
@@ -352,7 +425,7 @@ export function FieldScanner() {
                 <div>
                   <label className="label">Motif (obligatoire)</label>
                   <div className="space-y-2 mt-1">
-                    {VENTE_MOTIFS.map((m) => (
+                    {VENTE_NON_REALISEE_MOTIFS.map((m) => (
                       <label key={m} className="flex items-center gap-2 cursor-pointer">
                         <input type="radio" name="motif" checked={motif === m} onChange={() => setMotif(m)} className="w-4 h-4 text-primary-600" />
                         <span className="text-sm text-gray-700">{m}</span>
@@ -387,15 +460,22 @@ export function FieldScanner() {
                   result.visit?.vente_status === "promesse_achat" ? "bg-warning-50" : "bg-accent-50"
                 }`}>
                   {result.visit?.vente_status === "vente_realisee" ? <TrendingUp size={52} className="text-success-600" /> :
+                   result.visit?.vente_status === "vente_livraison" ? <Truck size={52} className="text-blue-600" /> :
                    result.visit?.vente_status === "vente_non_realisee" ? <TrendingDown size={52} className="text-error-500" /> :
                    result.visit?.vente_status === "promesse_achat" ? <Package size={52} className="text-warning-600" /> :
                    <CheckCircle2 size={52} className="text-accent-600" />}
                 </div>
                 <h1 className="text-2xl font-bold text-gray-900 mb-2">
                   {result.visit?.vente_status === "vente_realisee" ? "Vente réalisée" :
+                   result.visit?.vente_status === "vente_livraison" ? "Vente et livraison" :
                    result.visit?.vente_status === "vente_non_realisee" ? "Vente non réalisée" :
                    result.visit?.vente_status === "promesse_achat" ? "Promesse enregistrée" : "Présence validée"}
                 </h1>
+                {blNumero && (
+                  <div className="card p-3 mb-4 bg-blue-50 border-blue-200">
+                    <p className="text-sm text-blue-700 flex items-center gap-2 justify-center"><FileText size={16} /> Bon de livraison généré : <strong>{blNumero}</strong></p>
+                  </div>
+                )}
                 <p className="text-gray-500 text-sm mb-2">Votre visite a été enregistrée avec succès.</p>
                 {pointName && <p className="text-primary-700 font-semibold text-sm mb-4">{pointName}</p>}
                 <div className="card p-4 mb-6 text-left">

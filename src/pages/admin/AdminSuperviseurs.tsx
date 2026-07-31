@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, UserCog } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Superviseur } from "@/types";
+import type { Superviseur, Secteur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { formatDate } from "@/lib/format";
 
@@ -85,7 +85,8 @@ export function AdminSuperviseurs() {
                       {s.active ? <><UserCheck size={12} /> Actif</> : <><UserX size={12} /> Désactivé</>}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-500 mt-0.5">Identifiant : {s.identifiant}</p>
+                  <p className="text-sm text-gray-500 mt-0.5">Identifiant : {s.identifiant}{s.telephone ? ` — ${s.telephone}` : ""}</p>
+                  {s.secteur_nom && <span className="badge bg-primary-50 text-primary-600 mt-1">{s.secteur_nom}</span>}
                   <p className="text-xs text-gray-400 mt-0.5">Créé le {formatDate(s.created_at)}</p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -129,11 +130,17 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
   const [identifiant, setIdentifiant] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
+  const [telephone, setTelephone] = useState("");
+  const [secteurId, setSecteurId] = useState("");
+  const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) { setIdentifiant(editing?.identifiant || ""); setFullName(editing?.full_name || ""); setPassword(""); setActive(editing?.active ?? true); }
+    if (open) {
+      api.listSecteurs().then(setSecteurs).catch(() => {});
+      setIdentifiant(editing?.identifiant || ""); setFullName(editing?.full_name || ""); setPassword(""); setTelephone(editing?.telephone || ""); setSecteurId(editing?.secteur_id || ""); setActive(editing?.active ?? true);
+    }
   }, [open, editing]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -141,11 +148,12 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
     setSaving(true);
     try {
       if (editing) {
-        await api.updateSuperviseur(editing.id, { identifiant: identifiant.trim(), full_name: fullName.trim(), active });
+        await api.updateSuperviseur(editing.id, { identifiant: identifiant.trim(), full_name: fullName.trim(), active, telephone: telephone.trim(), secteur_id: secteurId });
         showToast("success", "Superviseur modifié");
       } else {
         if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); setSaving(false); return; }
-        await api.createSuperviseur({ identifiant: identifiant.trim(), full_name: fullName.trim(), password });
+        if (!secteurId) { showToast("error", "Un secteur est obligatoire"); setSaving(false); return; }
+        await api.createSuperviseur({ identifiant: identifiant.trim(), full_name: fullName.trim(), password, telephone: telephone.trim(), secteur_id: secteurId });
         showToast("success", "Superviseur créé");
       }
       onSaved();
@@ -163,6 +171,20 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
         <div>
           <label className="label">Identifiant de connexion</label>
           <input className="input" value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} required placeholder="jdupont" />
+        </div>
+        <div>
+          <label className="label">Téléphone</label>
+          <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+229 ..." />
+        </div>
+        <div>
+          <label className="label">Secteur affecté *</label>
+          <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)} required>
+            <option value="">Sélectionner un secteur...</option>
+            {secteurs.filter(s => s.actif).map((s) => (
+              <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
+            ))}
+          </select>
+          {secteurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucun secteur actif. Créez d'abord un secteur.</p>}
         </div>
         {!editing && (
           <div>

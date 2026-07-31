@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import jsPDF from "jspdf";
 import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download } from "lucide-react";
 import { api } from "@/lib/api";
-import type { PointVente } from "@/types";
+import type { PointVente, Secteur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { getAccuratePosition } from "@/lib/gps";
 
@@ -93,6 +93,7 @@ export function AdminPointsVente() {
                     <span className="truncate">{p.address}, {p.city}</span>
                   </p>
                   <p className="text-gray-400">GPS: {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}</p>
+                  {p.secteur_nom && <span className="badge bg-primary-50 text-primary-600">{p.secteur_nom}</span>}
                 </div>
                 <div className="flex items-center gap-2">
                   <button onClick={() => setQrModal(p)} className="btn-secondary flex-1 text-xs py-2">
@@ -133,16 +134,20 @@ function PointVenteModal({
   const [city, setCity] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
+  const [secteurId, setSecteurId] = useState("");
+  const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [gettingGps, setGettingGps] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
+      api.listSecteurs().then(setSecteurs).catch(() => {});
       setName(editing?.name || "");
       setAddress(editing?.address || "");
       setCity(editing?.city || "");
       setLatitude(editing?.latitude?.toString() || "");
       setLongitude(editing?.longitude?.toString() || "");
+      setSecteurId(editing?.secteur_id || "");
     }
   }, [open, editing]);
 
@@ -170,10 +175,10 @@ function PointVenteModal({
     setSaving(true);
     try {
       if (editing) {
-        await api.updatePointVente(editing.id, { name, address, city, latitude: lat, longitude: lng });
+        await api.updatePointVente(editing.id, { name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || null });
         showToast("success", "Point de vente modifié");
       } else {
-        await api.createPointVente({ name, address, city, latitude: lat, longitude: lng });
+        await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined });
         showToast("success", "Point de vente créé");
       }
       onSaved();
@@ -198,6 +203,15 @@ function PointVenteModal({
         <div>
           <label className="label">Ville</label>
           <input className="input" value={city} onChange={(e) => setCity(e.target.value)} required placeholder="Paris" />
+        </div>
+        <div>
+          <label className="label">Secteur</label>
+          <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)}>
+            <option value="">Aucun secteur</option>
+            {secteurs.filter(s => s.actif).map((s) => (
+              <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
+            ))}
+          </select>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>

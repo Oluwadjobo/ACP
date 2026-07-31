@@ -12,11 +12,13 @@ interface NavItem {
 const navItems: NavItem[] = [
   { path: "/admin", label: "Tableau de bord", icon: LayoutDashboard },
   { path: "/admin/carte", label: "Carte", icon: MapIcon },
+  { path: "/admin/secteurs", label: "Secteurs", icon: MapPin },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users },
   { path: "/admin/superviseurs", label: "Superviseurs", icon: UserCog },
   { path: "/admin/admins", label: "Administrateurs", icon: Shield },
   { path: "/admin/produits", label: "Produits", icon: Package },
   { path: "/admin/points-vente", label: "Points de vente", icon: Store },
+  { path: "/admin/bons-livraison", label: "Bons de livraison", icon: FileText },
 ];
 
 export function AdminLayout({ children }: { children: ReactNode }) {

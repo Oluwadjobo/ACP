@@ -69,13 +69,13 @@ export const api = {
     method: "GET",
   }),
 
-  createCommercial: (body: { identifiant: string; full_name: string; password: string }) =>
+  createCommercial: (body: { identifiant: string; full_name: string; password: string; telephone?: string; superviseur_id?: string }) =>
     apiRequest<import("@/types").Commercial>("/commerciaux", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateCommercial: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean }>) =>
+  updateCommercial: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; superviseur_id: string | null }>) =>
     apiRequest<import("@/types").Commercial>(`/commerciaux/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -95,13 +95,13 @@ export const api = {
     method: "GET",
   }),
 
-  createSuperviseur: (body: { identifiant: string; full_name: string; password: string }) =>
+  createSuperviseur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; secteur_id?: string }) =>
     apiRequest<import("@/types").Superviseur>("/superviseurs", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean }>) =>
+  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; secteur_id: string | null }>) =>
     apiRequest<import("@/types").Superviseur>(`/superviseurs/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -142,6 +142,26 @@ export const api = {
   deleteAdmin: (id: string) =>
     apiRequest<{ success: boolean }>(`/admins/${id}`, { method: "DELETE" }),
 
+  // Admin - Secteurs
+  listSecteurs: () => apiRequest<import("@/types").Secteur[]>("/secteurs", {
+    method: "GET",
+  }),
+
+  createSecteur: (body: { nom: string; code: string; description?: string }) =>
+    apiRequest<import("@/types").Secteur>("/secteurs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateSecteur: (id: string, body: Partial<{ nom: string; code: string; description: string; actif: boolean }>) =>
+    apiRequest<import("@/types").Secteur>(`/secteurs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  deleteSecteur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/secteurs/${id}`, { method: "DELETE" }),
+
   // Admin - Produits
   listProduits: () => apiRequest<import("@/types").Produit[]>("/produits", {
     method: "GET",
@@ -167,6 +187,7 @@ export const api = {
     city: string;
     latitude: number;
     longitude: number;
+    secteur_id?: string;
   }) =>
     apiRequest<import("@/types").PointVente>("/points-vente", {
       method: "POST",
@@ -175,7 +196,7 @@ export const api = {
 
   updatePointVente: (
     id: string,
-    body: Partial<{ name: string; address: string; city: string; latitude: number; longitude: number }>
+    body: Partial<{ name: string; address: string; city: string; latitude: number; longitude: number; secteur_id: string | null }>
   ) =>
     apiRequest<import("@/types").PointVente>(`/points-vente/${id}`, {
       method: "PUT",
@@ -202,6 +223,30 @@ export const api = {
       { method: "GET" }
     ),
 
+  listVentes: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").Vente[]; count: number; page: number; pageSize: number }>(
+      `/ventes?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  listBonsLivraison: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").BonLivraison[]; count: number; page: number; pageSize: number }>(
+      `/bons-livraison?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  updateBlStatut: (id: string, statut: string, commentaire?: string) =>
+    apiRequest<{ success: boolean }>(`/bons-livraison/${id}/statut`, {
+      method: "PUT",
+      body: JSON.stringify({ statut, commentaire }),
+    }),
+
+  listControles: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").ControleTerrain[]; count: number; page: number; pageSize: number }>(
+      `/controles-terrain?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
   // Field - Shared
   resolveQr: (qr_token: string) =>
     apiRequest<{ id: string; name: string; address: string; city: string; latitude: number; longitude: number }>(
@@ -221,6 +266,18 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  createVente: (body: {
+    visite_id: string;
+    point_vente_id: string;
+    lignes: { produit_nom: string; quantite: number; prix_unitaire?: number; observation?: string }[];
+    livraison_immédiate?: boolean;
+    observation?: string;
+  }) =>
+    apiRequest<{ id: string; bl_id?: string; bl_numero?: string; created_at: string }>("/ventes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   createPromesse: (body: {
     visite_id: string;
     point_vente_id: string;
@@ -236,5 +293,31 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  createControle: (body: {
+    point_vente_id: string;
+    visite_id?: string;
+    notation: string;
+    presence_comtesse: boolean;
+    disponibilite: boolean;
+    visibilite: boolean;
+    merchandising: boolean;
+    presence_concurrents: boolean;
+    commentaires?: string;
+    recommandations?: string;
+    actions_correctives?: string;
+  }) =>
+    apiRequest<{ id: string; created_at: string }>("/controles-terrain", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // Superviseur - ventes non réalisées de ses commerciaux
+  listVentesNonRealisees: () =>
+    apiRequest<import("@/types").Visite[]>("/ventes-non-realisees", { method: "GET" }),
+
   myVisites: () => apiRequest<import("@/types").Visite[]>("/mes-visites", { method: "GET" }),
+
+  myControles: () => apiRequest<import("@/types").ControleTerrain[]>("/mes-controles", { method: "GET" }),
+
+  myBonsLivraison: () => apiRequest<import("@/types").BonLivraison[]>("/mes-bons-livraison", { method: "GET" }),
 };

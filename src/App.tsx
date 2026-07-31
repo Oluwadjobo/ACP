@@ -10,8 +10,12 @@ import { AdminAdmins } from "@/pages/admin/AdminAdmins";
 import { AdminProduits } from "@/pages/admin/AdminProduits";
 import { AdminPointsVente } from "@/pages/admin/AdminPointsVente";
 import { AdminCarte } from "@/pages/admin/AdminCarte";
+import { AdminSecteurs } from "@/pages/admin/AdminSecteurs";
+import { AdminBonsLivraison } from "@/pages/admin/AdminBonsLivraison";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
+import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
+import { SuperviseurControleTerrain } from "@/pages/superviseur/SuperviseurControleTerrain";
 import type { UserType } from "@/types";
 
 const fieldHome: Record<string, string> = {
@@ -58,6 +62,8 @@ function AppRoutes() {
       {/* Admin routes */}
       <Route path="/admin" element={<ProtectedRoute allow="admin"><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/carte" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCarte /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/secteurs" element={<ProtectedRoute allow="admin"><AdminLayout><AdminSecteurs /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/bons-livraison" element={<ProtectedRoute allow="admin"><AdminLayout><AdminBonsLivraison /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/admins" element={<ProtectedRoute allow="admin"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
@@ -71,6 +77,8 @@ function AppRoutes() {
       {/* Superviseur routes */}
       <Route path="/superviseur" element={<ProtectedRoute allow="superviseur"><FieldScanner /></ProtectedRoute>} />
       <Route path="/superviseur/historique" element={<ProtectedRoute allow="superviseur"><FieldHistory /></ProtectedRoute>} />
+      <Route path="/superviseur/ventes-non-realisees" element={<ProtectedRoute allow="superviseur"><SuperviseurVentesNonRealisees /></ProtectedRoute>} />
+      <Route path="/superviseur/controle-terrain" element={<ProtectedRoute allow="superviseur"><SuperviseurControleTerrain /></ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

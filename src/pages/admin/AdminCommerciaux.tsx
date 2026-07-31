@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Commercial } from "@/types";
+import type { Commercial, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { formatDate } from "@/lib/format";
 
@@ -96,6 +96,8 @@ export function AdminCommerciaux() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-semibold text-gray-900 text-sm">{c.full_name}</p>
+                    {c.superviseur_nom && <span className="badge bg-blue-50 text-blue-600">{c.superviseur_nom}</span>}
+                    {c.secteur_nom && <span className="badge bg-primary-50 text-primary-600">{c.secteur_nom}</span>}
                     <span className={`badge ${c.active ? "bg-accent-50 text-accent-700" : "bg-gray-100 text-gray-500"}`}>
                       {c.active ? (
                         <><UserCheck size={12} /> Actif</>
@@ -104,7 +106,7 @@ export function AdminCommerciaux() {
                       )}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-500 mt-0.5">Identifiant : {c.identifiant}</p>
+                  <p className="text-sm text-gray-500 mt-0.5">Identifiant : {c.identifiant}{c.telephone ? ` — ${c.telephone}` : ""}</p>
                   <p className="text-xs text-gray-400 mt-0.5">Créé le {formatDate(c.created_at)}</p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -200,14 +202,20 @@ function CommercialModal({
   const [identifiant, setIdentifiant] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
+  const [telephone, setTelephone] = useState("");
+  const [superviseurId, setSuperviseurId] = useState("");
+  const [superviseurs, setSuperviseurs] = useState<Superviseur[]>([]);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
+      api.listSuperviseurs().then(setSuperviseurs).catch(() => {});
       setIdentifiant(editing?.identifiant || "");
       setFullName(editing?.full_name || "");
       setPassword("");
+      setTelephone(editing?.telephone || "");
+      setSuperviseurId(editing?.superviseur_id || "");
       setActive(editing?.active ?? true);
     }
   }, [open, editing]);
@@ -216,11 +224,18 @@ function CommercialModal({
     e.preventDefault();
     setSaving(true);
     try {
+      if (!superviseurId) {
+        showToast("error", "Un superviseur de rattachement est obligatoire");
+        setSaving(false);
+        return;
+      }
       if (editing) {
         await api.updateCommercial(editing.id, {
           identifiant: identifiant.trim(),
           full_name: fullName.trim(),
           active,
+          telephone: telephone.trim(),
+          superviseur_id: superviseurId,
         });
         showToast("success", "Commercial modifié");
       } else {
@@ -233,6 +248,8 @@ function CommercialModal({
           identifiant: identifiant.trim(),
           full_name: fullName.trim(),
           password,
+          telephone: telephone.trim(),
+          superviseur_id: superviseurId,
         });
         showToast("success", "Commercial créé");
       }
@@ -254,6 +271,20 @@ function CommercialModal({
         <div>
           <label className="label">Identifiant de connexion</label>
           <input className="input" value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} required placeholder="jdupont" />
+        </div>
+        <div>
+          <label className="label">Téléphone</label>
+          <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+229 ..." />
+        </div>
+        <div>
+          <label className="label">Superviseur de rattachement *</label>
+          <select className="input" value={superviseurId} onChange={(e) => setSuperviseurId(e.target.value)} required>
+            <option value="">Sélectionner un superviseur...</option>
+            {superviseurs.filter(s => s.active).map((s) => (
+              <option key={s.id} value={s.id}>{s.full_name}{s.secteur_nom ? ` — ${s.secteur_nom}` : ""}</option>
+            ))}
+          </select>
+          {superviseurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucun superviseur actif. Créez d'abord un superviseur.</p>}
         </div>
         {!editing && (
           <div>

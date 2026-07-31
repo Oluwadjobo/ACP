@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Users, CalendarCheck, Clock, MapPin, CheckCircle2, AlertTriangle, Store, Download, FileSpreadsheet, UserCog, Package, TrendingUp, TrendingDown } from "lucide-react";
+import { Users, CalendarCheck, Clock, MapPin, CheckCircle2, AlertTriangle, Store, Download, FileSpreadsheet, UserCog, Package, TrendingUp, TrendingDown, FileText, ClipboardCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import type { DashboardStats, Visite, PromesseAchat } from "@/types";
 import { formatDateTime, formatRelative, formatDate, formatTime } from "@/lib/format";
@@ -96,11 +96,15 @@ export function AdminDashboard() {
   const statCards = [
     { label: "Commerciaux actifs", value: stats?.totalCommerciaux ?? 0, icon: Users, color: "bg-primary-50 text-primary-700", ring: "ring-primary-100" },
     { label: "Superviseurs actifs", value: stats?.totalSuperviseurs ?? 0, icon: UserCog, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
+    { label: "Secteurs", value: stats?.totalSecteurs ?? 0, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
+    { label: "Points de vente", value: stats?.totalPointsVente ?? 0, icon: Store, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
     { label: "Visites aujourd'hui", value: stats?.visitesToday ?? 0, icon: CalendarCheck, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
-    { label: "Promesses d'achat", value: stats?.promessesToday ?? 0, icon: Package, color: "bg-warning-50 text-warning-600", ring: "ring-warning-100" },
     { label: "Ventes réalisées", value: stats?.ventesRealisees ?? 0, icon: TrendingUp, color: "bg-success-50 text-success-600", ring: "ring-success-100" },
     { label: "Ventes non réalisées", value: stats?.ventesNonRealisees ?? 0, icon: TrendingDown, color: "bg-error-50 text-error-600", ring: "ring-error-100" },
-    { label: "Tentatives hors zone", value: stats?.outOfZoneToday ?? 0, icon: AlertTriangle, color: "bg-error-50 text-error-500", ring: "ring-error-100" },
+    { label: "Promesses d'achat", value: stats?.promessesToday ?? 0, icon: Package, color: "bg-warning-50 text-warning-600", ring: "ring-warning-100" },
+    { label: "BL en attente", value: stats?.blEnAttente ?? 0, icon: FileText, color: "bg-warning-50 text-warning-700", ring: "ring-warning-100" },
+    { label: "BL livrés", value: stats?.blLivres ?? 0, icon: FileText, color: "bg-success-50 text-success-700", ring: "ring-success-100" },
+    { label: "Contrôles terrain", value: stats?.controlesToday ?? 0, icon: ClipboardCheck, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
     { label: "Dernière visite", value: stats?.lastVisite ? formatRelative(stats.lastVisite) : "Aucune", icon: Clock, color: "bg-gray-100 text-gray-600", ring: "ring-gray-200" },
   ];
 
