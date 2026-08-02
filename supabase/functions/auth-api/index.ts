@@ -859,6 +859,19 @@ async function handleRoute(req: Request): Promise<Response> {
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse(data);
     }
+
+    // --- CREATE POINT DE VENTE (field users) ---
+    if (path === "/points-vente" && method === "POST") {
+      const { name, address, city, latitude, longitude, secteur_id } = await req.json();
+      if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
+      const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+      const qr_token = generateQrToken();
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
+      if (secteur_id) insertData.secteur_id = secteur_id;
+      const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
+      if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }
+      return jsonResponse(data, 201);
+    }
   }
 
   return jsonError(404, "Route introuvable");

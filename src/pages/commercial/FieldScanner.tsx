@@ -1,8 +1,8 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X } from "lucide-react";
 import { api } from "@/lib/api";
-import type { VisitResult, Produit, VenteStatus } from "@/types";
+import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
 import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
@@ -32,6 +32,7 @@ export function FieldScanner() {
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
   const [postAction, setPostAction] = useState<PostAction>(null);
   const [produits, setProduits] = useState<Produit[]>([]);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Promesse form state
   const [selectedProduits, setSelectedProduits] = useState<string[]>([]);
@@ -116,9 +117,7 @@ export function FieldScanner() {
       setGpsStatus(null);
       if (visitResult.status === "confirmed") {
         setState("action");
-        if (isSuperviseur) {
-          try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
-        }
+        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
       } else {
         setState("result");
       }
@@ -151,9 +150,7 @@ export function FieldScanner() {
       setGpsStatus(null);
       if (visitResult.status === "confirmed") {
         setState("action");
-        if (isSuperviseur) {
-          try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
-        }
+        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
       }
     } catch (err) {
       if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
@@ -241,6 +238,7 @@ export function FieldScanner() {
             <h1 className="text-xl font-bold text-gray-900 mb-2">Scanner un QR Code</h1>
             <p className="text-gray-500 text-sm mb-8">Appuyez sur le bouton ci-dessous pour ouvrir la caméra et scanner le QR code affiché dans le point de vente.</p>
             <button onClick={startCamera} className="btn-primary w-full text-base py-4"><Camera size={22} /> Ouvrir la caméra</button>
+            <button onClick={() => setShowCreateModal(true)} className="btn-secondary w-full mt-3"><Store size={18} /> Créer un point de vente</button>
           </div>
         )}
 
@@ -535,6 +533,114 @@ export function FieldScanner() {
       <footer className="px-4 py-3 border-t border-gray-100 bg-white">
         <button onClick={() => { stopCamera(); localStorage.removeItem("session_token"); window.location.href = "/"; }} className="btn-ghost w-full text-gray-500 text-sm">Se déconnecter</button>
       </footer>
+      <CreatePointVenteModal open={showCreateModal} onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); reset(); }} />
+    </div>
+  );
+}
+
+function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [secteurId, setSecteurId] = useState("");
+  const [secteurs, setSecteurs] = useState<Secteur[]>([]);
+  const [gettingGps, setGettingGps] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      api.listSecteurs().then(setSecteurs).catch(() => {});
+      setName(""); setAddress(""); setCity(""); setLatitude(""); setLongitude(""); setSecteurId(""); setError("");
+    }
+  }, [open]);
+
+  const useMyGps = async () => {
+    setGettingGps(true);
+    try {
+      const pos = await getAccuratePosition(20000, 10);
+      setLatitude(pos.latitude.toFixed(6));
+      setLongitude(pos.longitude.toFixed(6));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
+    } finally {
+      setGettingGps(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || lat < -90 || lat > 90) { setError("Latitude invalide"); return; }
+    if (isNaN(lng) || lng < -180 || lng > 180) { setError("Longitude invalide"); return; }
+    setSaving(true);
+    try {
+      await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined });
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="font-bold text-gray-900 flex items-center gap-2"><Store size={20} className="text-primary-600" /> Nouveau point de vente</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div>
+            <label className="label">Nom du point de vente</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Supérette du Centre" />
+          </div>
+          <div>
+            <label className="label">Adresse</label>
+            <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} required placeholder="12 rue de la Paix" />
+          </div>
+          <div>
+            <label className="label">Ville</label>
+            <input className="input" value={city} onChange={(e) => setCity(e.target.value)} required placeholder="Paris" />
+          </div>
+          <div>
+            <label className="label">Tournée (facultatif)</label>
+            <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)}>
+              <option value="">Aucune tournée</option>
+              {secteurs.filter(s => s.actif).map((s) => (
+                <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Latitude</label>
+              <input className="input" value={latitude} onChange={(e) => setLatitude(e.target.value)} required placeholder="48.8566" />
+            </div>
+            <div>
+              <label className="label">Longitude</label>
+              <input className="input" value={longitude} onChange={(e) => setLongitude(e.target.value)} required placeholder="2.3522" />
+            </div>
+          </div>
+          <button type="button" onClick={useMyGps} disabled={gettingGps} className="btn-secondary w-full text-xs py-2">
+            <MapPin size={14} />
+            {gettingGps ? "Localisation en cours..." : "Utiliser ma position GPS actuelle"}
+          </button>
+          {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700">{error}</div>}
+          <div className="flex gap-3 justify-end pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>
+            <button type="submit" disabled={saving} className="btn-primary">
+              {saving ? "Enregistrement..." : "Créer"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
