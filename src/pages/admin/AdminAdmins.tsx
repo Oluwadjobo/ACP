@@ -3,6 +3,7 @@ import { UserPlus, Search, Pencil, KeyRound, Trash2, Shield } from "lucide-react
 import { api } from "@/lib/api";
 import type { AdminUser } from "@/types";
 import { Modal } from "@/components/Modal";
+import { PermissionsEditor } from "@/components/PermissionsEditor";
 import { formatDate } from "@/lib/format";
 
 export function AdminAdmins() {
@@ -13,6 +14,7 @@ export function AdminAdmins() {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [passwordModal, setPasswordModal] = useState<AdminUser | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
+  const [permsTarget, setPermsTarget] = useState<AdminUser | null>(null);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   const showToast = (type: "success" | "error", msg: string) => {
@@ -82,6 +84,7 @@ export function AdminAdmins() {
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <button onClick={() => { setEditing(a); setModalOpen(true); }} className="btn-ghost p-2 rounded-lg" title="Modifier"><Pencil size={16} /></button>
                   <button onClick={() => setPasswordModal(a)} className="btn-ghost p-2 rounded-lg" title="Réinitialiser le mot de passe"><KeyRound size={16} /></button>
+                  <button onClick={() => setPermsTarget(a)} className="btn-ghost p-2 rounded-lg" title="Permissions"><Shield size={16} /></button>
                   <button onClick={() => setDeleteTarget(a)} className="btn-ghost p-2 rounded-lg text-error-500 hover:bg-error-50" title="Supprimer"><Trash2 size={16} /></button>
                 </div>
               </div>
@@ -103,6 +106,12 @@ export function AdminAdmins() {
             catch (err) { showToast("error", err instanceof Error ? err.message : "Erreur"); }
           }} className="btn-danger">Supprimer</button>
         </div>
+      </Modal>
+
+      <Modal open={!!permsTarget} onClose={() => setPermsTarget(null)} title="Permissions" maxWidth="max-w-2xl">
+        {permsTarget && (
+          <PermissionsEditor userType="admin" userId={permsTarget.id} userLabel={permsTarget.full_name} />
+        )}
       </Modal>
     </div>
   );

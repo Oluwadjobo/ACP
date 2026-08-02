@@ -14,7 +14,7 @@ type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | 
 type VenteLigneForm = { produit_nom: string; quantite: number; prix_unitaire: number; observation: string };
 
 export function FieldScanner() {
-  const { fullName, userType } = useAuth();
+  const { fullName, userType, hasPermission } = useAuth();
   const navigate = useNavigate();
   const isSuperviseur = userType === "superviseur";
 
@@ -216,13 +216,15 @@ export function FieldScanner() {
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><ScanLine size={20} /><span className="font-bold text-sm">Contrôle Présence</span></div>
         <div className="flex items-center gap-1">
-          {isSuperviseur && (
-            <>
-              <button onClick={() => navigate(ventesNonRealiseesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Ventes non réalisées"><TrendingDown size={20} /></button>
-              <button onClick={() => navigate(controleTerrainPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Contrôle terrain"><ClipboardCheck size={20} /></button>
-            </>
+          {isSuperviseur && hasPermission("view_ventes_non_realisees") && (
+            <button onClick={() => navigate(ventesNonRealiseesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Ventes non réalisées"><TrendingDown size={20} /></button>
           )}
-          <button onClick={() => navigate(historyPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg"><History size={20} /></button>
+          {isSuperviseur && hasPermission("control_terrain") && (
+            <button onClick={() => navigate(controleTerrainPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Contrôle terrain"><ClipboardCheck size={20} /></button>
+          )}
+          {hasPermission("view_history") && (
+            <button onClick={() => navigate(historyPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg"><History size={20} /></button>
+          )}
         </div>
       </header>
 
@@ -238,7 +240,9 @@ export function FieldScanner() {
             <h1 className="text-xl font-bold text-gray-900 mb-2">Scanner un QR Code</h1>
             <p className="text-gray-500 text-sm mb-8">Appuyez sur le bouton ci-dessous pour ouvrir la caméra et scanner le QR code affiché dans le point de vente.</p>
             <button onClick={startCamera} className="btn-primary w-full text-base py-4"><Camera size={22} /> Ouvrir la caméra</button>
-            <button onClick={() => setShowCreateModal(true)} className="btn-secondary w-full mt-3"><Store size={18} /> Créer un point de vente</button>
+            {hasPermission("create_point_vente") && (
+              <button onClick={() => setShowCreateModal(true)} className="btn-secondary w-full mt-3"><Store size={18} /> Créer un point de vente</button>
+            )}
           </div>
         )}
 
@@ -292,23 +296,30 @@ export function FieldScanner() {
 
             {!postAction && (
               <div className="space-y-3">
-                {isSuperviseur && (
+                {hasPermission("create_promesse") && (
                   <button onClick={() => setPostAction("promesse_achat")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-warning-200 transition-all text-left">
                     <div className="w-12 h-12 rounded-xl bg-warning-50 flex items-center justify-center"><Package size={24} className="text-warning-600" /></div>
                     <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Promesse d'achat</p><p className="text-xs text-gray-500">Enregistrer une intention d'achat</p></div>
                     <ChevronRight size={20} className="text-gray-400" />
                   </button>
                 )}
-                <button onClick={() => setPostAction("vente_realisee")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-success-200 transition-all text-left">
-                  <div className="w-12 h-12 rounded-xl bg-success-50 flex items-center justify-center"><TrendingUp size={24} className="text-success-600" /></div>
-                  <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Vente réalisée</p><p className="text-xs text-gray-500">La vente a été conclue</p></div>
-                  <ChevronRight size={20} className="text-gray-400" />
-                </button>
-                <button onClick={() => setPostAction("vente_non_realisee")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-error-200 transition-all text-left">
-                  <div className="w-12 h-12 rounded-xl bg-error-50 flex items-center justify-center"><TrendingDown size={24} className="text-error-500" /></div>
-                  <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Vente non réalisée</p><p className="text-xs text-gray-500">La vente n'a pas abouti</p></div>
-                  <ChevronRight size={20} className="text-gray-400" />
-                </button>
+                {hasPermission("record_vente") && (
+                  <button onClick={() => setPostAction("vente_realisee")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-success-200 transition-all text-left">
+                    <div className="w-12 h-12 rounded-xl bg-success-50 flex items-center justify-center"><TrendingUp size={24} className="text-success-600" /></div>
+                    <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Vente réalisée</p><p className="text-xs text-gray-500">La vente a été conclue</p></div>
+                    <ChevronRight size={20} className="text-gray-400" />
+                  </button>
+                )}
+                {hasPermission("record_vente") && (
+                  <button onClick={() => setPostAction("vente_non_realisee")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-error-200 transition-all text-left">
+                    <div className="w-12 h-12 rounded-xl bg-error-50 flex items-center justify-center"><TrendingDown size={24} className="text-error-500" /></div>
+                    <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Vente non réalisée</p><p className="text-xs text-gray-500">La vente n'a pas abouti</p></div>
+                    <ChevronRight size={20} className="text-gray-400" />
+                  </button>
+                )}
+                {!hasPermission("record_vente") && !hasPermission("create_promesse") && (
+                  <p className="text-center text-gray-400 text-sm py-4">Aucune action disponible. Contactez votre administrateur.</p>
+                )}
               </div>
             )}
 

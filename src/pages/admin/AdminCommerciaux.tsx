@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users } from "lucide-react";
+import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users, Shield } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Commercial, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
+import { PermissionsEditor } from "@/components/PermissionsEditor";
 import { formatDate } from "@/lib/format";
 
 export function AdminCommerciaux() {
@@ -13,6 +14,7 @@ export function AdminCommerciaux() {
   const [editing, setEditing] = useState<Commercial | null>(null);
   const [passwordModal, setPasswordModal] = useState<Commercial | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Commercial | null>(null);
+  const [permsTarget, setPermsTarget] = useState<Commercial | null>(null);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   const showToast = (type: "success" | "error", msg: string) => {
@@ -125,6 +127,13 @@ export function AdminCommerciaux() {
                     <KeyRound size={16} />
                   </button>
                   <button
+                    onClick={() => setPermsTarget(c)}
+                    className="btn-ghost p-2 rounded-lg"
+                    title="Permissions"
+                  >
+                    <Shield size={16} />
+                  </button>
+                  <button
                     onClick={() => setDeleteTarget(c)}
                     className="btn-ghost p-2 rounded-lg text-error-500 hover:bg-error-50"
                     title="Supprimer"
@@ -185,6 +194,13 @@ export function AdminCommerciaux() {
             Supprimer
           </button>
         </div>
+      </Modal>
+
+      {/* Permissions editor */}
+      <Modal open={!!permsTarget} onClose={() => setPermsTarget(null)} title="Permissions" maxWidth="max-w-2xl">
+        {permsTarget && (
+          <PermissionsEditor userType="commercial" userId={permsTarget.id} userLabel={permsTarget.full_name} />
+        )}
       </Modal>
     </div>
   );

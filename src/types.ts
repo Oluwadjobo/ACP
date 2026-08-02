@@ -1,5 +1,47 @@
 export type UserType = "admin" | "commercial" | "superviseur";
 
+export type Permission =
+  | "scan" | "create_point_vente" | "record_vente" | "create_promesse"
+  | "control_terrain" | "view_history" | "view_ventes_non_realisees"
+  | "view_dashboard" | "view_carte" | "manage_secteurs" | "manage_commerciaux"
+  | "manage_superviseurs" | "manage_admins" | "manage_produits" | "manage_points_vente"
+  | "manage_bons_livraison" | "view_visites" | "view_ventes" | "view_controles";
+
+export type Permissions = Record<Permission, boolean>;
+
+export const FIELD_PERMISSIONS: Permission[] = [
+  "scan", "create_point_vente", "record_vente", "create_promesse",
+  "control_terrain", "view_history", "view_ventes_non_realisees",
+];
+
+export const DASHBOARD_PERMISSIONS: Permission[] = [
+  "view_dashboard", "view_carte", "manage_secteurs", "manage_commerciaux",
+  "manage_superviseurs", "manage_admins", "manage_produits", "manage_points_vente",
+  "manage_bons_livraison", "view_visites", "view_ventes", "view_controles",
+];
+
+export const PERMISSION_LABELS: Record<Permission, string> = {
+  scan: "Scanner (visites)",
+  create_point_vente: "Créer un point de vente",
+  record_vente: "Enregistrer une vente",
+  create_promesse: "Créer une promesse d'achat",
+  control_terrain: "Contrôle terrain",
+  view_history: "Voir l'historique",
+  view_ventes_non_realisees: "Voir les ventes non réalisées",
+  view_dashboard: "Tableau de bord",
+  view_carte: "Carte",
+  manage_secteurs: "Gérer les tournées",
+  manage_commerciaux: "Gérer les commerciaux",
+  manage_superviseurs: "Gérer les Team Leaders",
+  manage_admins: "Gérer les administrateurs",
+  manage_produits: "Gérer les produits",
+  manage_points_vente: "Gérer les points de vente",
+  manage_bons_livraison: "Gérer les bons de livraison",
+  view_visites: "Voir les visites",
+  view_ventes: "Voir les ventes",
+  view_controles: "Voir les contrôles",
+};
+
 export interface Session {
   token: string;
   userType: UserType;
@@ -25,6 +67,7 @@ export interface Commercial {
   superviseur_id?: string | null;
   superviseur_nom?: string | null;
   secteur_nom?: string | null;
+  permissions?: Permissions;
   created_at: string;
   updated_at?: string;
 }
@@ -44,6 +87,7 @@ export interface Superviseur {
   secteur_id?: string | null;
   secteur_nom?: string | null;
   tournees?: SuperviseurTournee[];
+  permissions?: Permissions;
   created_at: string;
   updated_at?: string;
 }
@@ -53,6 +97,7 @@ export interface AdminUser {
   email: string;
   full_name: string;
   must_change_password: boolean;
+  permissions?: Permissions;
   created_at: string;
 }
 

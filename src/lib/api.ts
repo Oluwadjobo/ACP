@@ -247,6 +247,19 @@ export const api = {
       { method: "GET" }
     ),
 
+  // Admin - Permissions
+  getPermissions: (userType: string, userId: string) =>
+    apiRequest<{ permissions: import("@/types").Permissions }>(`/permissions?type=${userType}&id=${userId}`, { method: "GET" }),
+
+  updatePermissions: (userType: string, userId: string, permissions: Record<string, boolean>) =>
+    apiRequest<{ success: boolean; permissions: import("@/types").Permissions }>("/permissions", {
+      method: "PUT",
+      body: JSON.stringify({ userType, userId, permissions }),
+    }),
+
+  getPermissionCatalog: () =>
+    apiRequest<{ field: string[]; dashboard: string[] }>("/permissions/catalog", { method: "GET" }),
+
   // Field - Shared
   resolveQr: (qr_token: string) =>
     apiRequest<{ id: string; name: string; address: string; city: string; latitude: number; longitude: number }>(

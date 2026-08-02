@@ -40,6 +40,56 @@ const VENTE_NON_REALISEE_MOTIFS = [
 const CONTROLE_NOTATIONS = ["excellent", "bon", "moyen", "faible", "critique"];
 const BL_STATUTS = ["en_attente", "livre", "partiel", "annule"];
 
+// ============ PERMISSION CATALOG ============
+
+const FIELD_PERMISSIONS = [
+  "scan", "create_point_vente", "record_vente", "create_promesse",
+  "control_terrain", "view_history", "view_ventes_non_realisees",
+] as const;
+
+const DASHBOARD_PERMISSIONS = [
+  "view_dashboard", "view_carte", "manage_secteurs", "manage_commerciaux",
+  "manage_superviseurs", "manage_admins", "manage_produits", "manage_points_vente",
+  "manage_bons_livraison", "view_visites", "view_ventes", "view_controles",
+] as const;
+
+const ALL_PERMISSIONS = [...FIELD_PERMISSIONS, ...DASHBOARD_PERMISSIONS];
+
+const DEFAULT_ADMIN_PERMS: Record<string, boolean> = Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, true]));
+const DEFAULT_SUPERVISEUR_PERMS: Record<string, boolean> = Object.fromEntries(
+  ["scan", "create_point_vente", "record_vente", "create_promesse", "control_terrain", "view_history", "view_ventes_non_realisees"].map((p) => [p, true])
+);
+const DEFAULT_COMMERCIAL_PERMS: Record<string, boolean> = Object.fromEntries(
+  ["scan", "create_point_vente", "record_vente", "view_history"].map((p) => [p, true])
+);
+
+function getDefaultPermissions(userType: UserType): Record<string, boolean> {
+  if (userType === "admin") return { ...DEFAULT_ADMIN_PERMS };
+  if (userType === "superviseur") return { ...DEFAULT_SUPERVISEUR_PERMS };
+  return { ...DEFAULT_COMMERCIAL_PERMS };
+}
+
+function normalizePermissions(raw: unknown, userType: UserType): Record<string, boolean> {
+  const defaults = getDefaultPermissions(userType);
+  if (!raw || typeof raw !== "object") return defaults;
+  const obj = raw as Record<string, unknown>;
+  const result: Record<string, boolean> = {};
+  for (const perm of ALL_PERMISSIONS) {
+    result[perm] = obj[perm] === true;
+  }
+  // Fill any missing with defaults
+  for (const [k, v] of Object.entries(defaults)) {
+    if (!(k in result)) result[k] = v;
+  }
+  return result;
+}
+
+async function getUserPermissions(userType: UserType, userId: string): Promise<Record<string, boolean>> {
+  const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+  const { data } = await supabase.from(table).select("permissions").eq("id", userId).maybeSingle();
+  return normalizePermissions(data?.permissions, userType);
+}
+
 // ============ CRYPTO HELPERS ============
 
 async function sha512(text: string): Promise<string> {
@@ -88,11 +138,11 @@ function generateBlNumero(): string {
 
 type UserType = "admin" | "commercial" | "superviseur";
 
-async function createSession(userType: UserType, userId: string, fullName: string): Promise<string> {
+async function createSession(userType: UserType, userId: string, fullName: string, permissions: Record<string, boolean>): Promise<string> {
   const token = generateToken();
   const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000).toISOString();
   const { error } = await supabase.from("sessions").insert({
-    token, user_type: userType, user_id: userId, full_name: fullName, expires_at: expiresAt,
+    token, user_type: userType, user_id: userId, full_name: fullName, expires_at: expiresAt, permissions,
   });
   if (error) throw new Error("Failed to create session");
   return token;
@@ -105,7 +155,9 @@ async function getSession(token: string) {
     await supabase.from("sessions").delete().eq("id", data.id);
     return null;
   }
-  return data;
+  // Re-read permissions from source table to pick up admin changes since login
+  const perms = await getUserPermissions(data.user_type as UserType, data.user_id);
+  return { ...data, permissions: perms };
 }
 
 // ============ GEO HELPERS ============
@@ -173,8 +225,9 @@ async function handleRoute(req: Request): Promise<Response> {
     const { data: admin } = await supabase.from("admins").select("*").eq("email", normalizedLogin.toLowerCase()).maybeSingle();
     if (admin) {
       if (await verifyPassword(password, admin.password_hash)) {
-        const token = await createSession("admin", admin.id, admin.full_name);
-        return jsonResponse({ token, userType: "admin", fullName: admin.full_name, userId: admin.id, mustChangePassword: admin.must_change_password ?? false });
+        const permissions = normalizePermissions(admin.permissions, "admin");
+        const token = await createSession("admin", admin.id, admin.full_name, permissions);
+        return jsonResponse({ token, userType: "admin", fullName: admin.full_name, userId: admin.id, mustChangePassword: admin.must_change_password ?? false, permissions });
       }
       return jsonError(401, "Identifiants incorrects");
     }
@@ -183,8 +236,9 @@ async function handleRoute(req: Request): Promise<Response> {
     if (sup) {
       if (!sup.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
       if (await verifyPassword(password, sup.password_hash)) {
-        const token = await createSession("superviseur", sup.id, sup.full_name);
-        return jsonResponse({ token, userType: "superviseur", fullName: sup.full_name, userId: sup.id });
+        const permissions = normalizePermissions(sup.permissions, "superviseur");
+        const token = await createSession("superviseur", sup.id, sup.full_name, permissions);
+        return jsonResponse({ token, userType: "superviseur", fullName: sup.full_name, userId: sup.id, permissions });
       }
       return jsonError(401, "Identifiants incorrects");
     }
@@ -193,8 +247,9 @@ async function handleRoute(req: Request): Promise<Response> {
     if (commercial) {
       if (!commercial.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
       if (await verifyPassword(password, commercial.password_hash)) {
-        const token = await createSession("commercial", commercial.id, commercial.full_name);
-        return jsonResponse({ token, userType: "commercial", fullName: commercial.full_name, userId: commercial.id });
+        const permissions = normalizePermissions(commercial.permissions, "commercial");
+        const token = await createSession("commercial", commercial.id, commercial.full_name, permissions);
+        return jsonResponse({ token, userType: "commercial", fullName: commercial.full_name, userId: commercial.id, permissions });
       }
       return jsonError(401, "Identifiants incorrects");
     }
@@ -212,7 +267,7 @@ async function handleRoute(req: Request): Promise<Response> {
     if (!token) return jsonError(401, "Non authentifié");
     const session = await getSession(token);
     if (!session) return jsonError(401, "Session expirée");
-    return jsonResponse({ userType: session.user_type, userId: session.user_id, fullName: session.full_name });
+    return jsonResponse({ userType: session.user_type, userId: session.user_id, fullName: session.full_name, permissions: session.permissions });
   }
 
   // ---------- AUTHED ROUTES ----------
@@ -220,6 +275,16 @@ async function handleRoute(req: Request): Promise<Response> {
   if (!token) return jsonError(401, "Non authentifié");
   const session = await getSession(token);
   if (!session) return jsonError(401, "Session expirée");
+
+  const perms = (session.permissions as Record<string, boolean>) || {};
+  function hasPermission(p: string): boolean {
+    if (session.user_type === "admin") return true;
+    return perms[p] === true;
+  }
+  function requirePermission(p: string): Response | null {
+    if (hasPermission(p)) return null;
+    return jsonError(403, "Vous n'avez pas l'autorisation d'effectuer cette action");
+  }
 
   // ===== ADMIN ROUTES =====
   if (session.user_type === "admin") {
@@ -271,7 +336,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- COMMERCIAUX CRUD ---
     if (path === "/commerciaux" && method === "GET") {
       const { data, error } = await supabase
-        .from("commerciaux").select("id, identifiant, full_name, active, telephone, superviseur_id, created_at, updated_at")
+        .from("commerciaux").select("id, identifiant, full_name, active, telephone, superviseur_id, created_at, updated_at, permissions")
         .order("created_at", { ascending: false });
       if (error) return jsonError(500, "Erreur de lecture");
       // Enrich with superviseur name and first tournée
@@ -333,7 +398,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- SUPERVISEURS CRUD ---
     if (path === "/superviseurs" && method === "GET") {
       const { data, error } = await supabase
-        .from("superviseurs").select("id, identifiant, full_name, active, telephone, created_at, updated_at")
+        .from("superviseurs").select("id, identifiant, full_name, active, telephone, created_at, updated_at, permissions")
         .order("created_at", { ascending: false });
       if (error) return jsonError(500, "Erreur de lecture");
       const enriched = await Promise.all((data || []).map(async (s: Record<string, unknown>) => {
@@ -404,7 +469,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ADMINS CRUD ---
     if (path === "/admins" && method === "GET") {
-      const { data, error } = await supabase.from("admins").select("id, email, full_name, must_change_password, created_at").order("created_at", { ascending: false });
+      const { data, error } = await supabase.from("admins").select("id, email, full_name, must_change_password, created_at, permissions").order("created_at", { ascending: false });
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse(data);
     }
@@ -623,6 +688,28 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({ success: true });
     }
 
+    // --- PERMISSIONS MANAGEMENT ---
+    if (path === "/permissions" && method === "GET") {
+      const userType = url.searchParams.get("type") as UserType | null;
+      const userId = url.searchParams.get("id");
+      if (!userType || !userId) return jsonError(400, "Type et id requis");
+      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      const { data } = await supabase.from(table).select("permissions").eq("id", userId).maybeSingle();
+      return jsonResponse({ permissions: normalizePermissions(data?.permissions, userType) });
+    }
+    if (path === "/permissions" && method === "PUT") {
+      const { userType, userId, permissions } = await req.json();
+      if (!userType || !userId) return jsonError(400, "Type et id requis");
+      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      const normalized = normalizePermissions(permissions, userType as UserType);
+      const { error } = await supabase.from(table).update({ permissions: normalized }).eq("id", userId);
+      if (error) return jsonError(500, "Erreur lors de la mise à jour des permissions");
+      return jsonResponse({ success: true, permissions: normalized });
+    }
+    if (path === "/permissions/catalog" && method === "GET") {
+      return jsonResponse({ field: [...FIELD_PERMISSIONS], dashboard: [...DASHBOARD_PERMISSIONS] });
+    }
+
     // --- ALL CONTROLES TERRAIN (admin) ---
     if (path === "/controles-terrain" && method === "GET") {
       const page = parseInt(url.searchParams.get("page") || "1");
@@ -644,6 +731,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- RESOLVE QR TOKEN ---
     if (path === "/resolve-qr" && method === "POST") {
+      const denied = requirePermission("scan"); if (denied) return denied;
       const { qr_token } = await req.json();
       if (!qr_token) return jsonError(400, "Token QR requis");
       const { data, error } = await supabase.from("points_vente").select("id, name, address, city, latitude, longitude").eq("qr_token", qr_token.trim()).maybeSingle();
@@ -653,6 +741,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- RECORD VISIT ---
     if (path === "/visites" && method === "POST") {
+      const denied = requirePermission("scan"); if (denied) return denied;
       const { point_vente_id, latitude, longitude } = await req.json();
       if (!point_vente_id || latitude == null || longitude == null) return jsonError(400, "Données de visite incomplètes");
       const { data: pv, error: pvError } = await supabase.from("points_vente").select("id, latitude, longitude, name").eq("id", point_vente_id).maybeSingle();
@@ -702,6 +791,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- CREATE VENTE (with multi-product lignes + auto BL) ---
     if (path === "/ventes" && method === "POST") {
+      const denied = requirePermission("record_vente"); if (denied) return denied;
       const { visite_id, point_vente_id, lignes, livraison_immediate, observation } = await req.json();
       if (!visite_id || !point_vente_id || !Array.isArray(lignes) || lignes.length === 0)
         return jsonError(400, "Visite, point de vente et au moins une ligne de produit requis");
@@ -780,6 +870,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- CREATE PROMESSE D'ACHAT (superviseur only) ---
     if (path === "/promesses" && method === "POST" && userRole === "superviseur") {
+      const denied = requirePermission("create_promesse"); if (denied) return denied;
       const { visite_id, point_vente_id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations } = await req.json();
       if (!visite_id || !point_vente_id || !produits) return jsonError(400, "Visite, point de vente et produits requis");
       const { data: visite } = await supabase.from("visites").select("id").eq("id", visite_id).eq("superviseur_id", userId).maybeSingle();
@@ -798,6 +889,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- CREATE CONTROLE TERRAIN (superviseur only) ---
     if (path === "/controles-terrain" && method === "POST" && userRole === "superviseur") {
+      const denied = requirePermission("control_terrain"); if (denied) return denied;
       const { point_vente_id, visite_id, notation, presence_comtesse, disponibilite, visibilite, merchandising, presence_concurrents, commentaires, recommandations, actions_correctives } = await req.json();
       if (!point_vente_id || !notation) return jsonError(400, "Point de vente et notation requis");
       if (!CONTROLE_NOTATIONS.includes(notation)) return jsonError(400, "Notation invalide");
@@ -815,6 +907,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MY VISITES ---
     if (path === "/mes-visites" && method === "GET") {
+      const denied = requirePermission("view_history"); if (denied) return denied;
       let query = supabase.from("visites").select(`id, visited_at, distance_meters, status, vente_status, motif, user_role, point_vente:points_vente(name, city, address)`).order("visited_at", { ascending: false });
       if (userRole === "commercial") query = query.eq("commercial_id", userId); else query = query.eq("superviseur_id", userId);
       const { data, error } = await query;
@@ -824,6 +917,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MY CONTROLES (superviseur) ---
     if (path === "/mes-controles" && method === "GET" && userRole === "superviseur") {
+      const denied = requirePermission("control_terrain"); if (denied) return denied;
       const { data, error } = await supabase
         .from("controles_terrain").select(`id, notation, presence_comtesse, disponibilite, visibilite, merchandising, presence_concurrents, commentaires, recommandations, actions_correctives, created_at, point_vente:points_vente(name, city, address)`)
         .eq("superviseur_id", userId).order("created_at", { ascending: false });
@@ -833,6 +927,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MY BONS LIVRAISON (commercial) ---
     if (path === "/mes-bons-livraison" && method === "GET" && userRole === "commercial") {
+      const denied = requirePermission("record_vente"); if (denied) return denied;
       const { data, error } = await supabase
         .from("bons_livraison").select(`id, numero, statut, commentaire, date_livraison, created_at, point_vente:points_vente(name, city, address), lignes:bl_lignes(produit_nom, quantite, unite)`)
         .eq("commercial_id", userId).order("created_at", { ascending: false });
@@ -842,6 +937,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- VENTES NON REALISEES (superviseur: visites of own commerciaux with vente_non_realisee) ---
     if (path === "/ventes-non-realisees" && method === "GET" && userRole === "superviseur") {
+      const denied = requirePermission("view_ventes_non_realisees"); if (denied) return denied;
       // Get commerciaux under this superviseur
       const { data: commerciaux } = await supabase.from("commerciaux").select("id").eq("superviseur_id", userId);
       if (!commerciaux || commerciaux.length === 0) return jsonResponse([]);
@@ -862,6 +958,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- CREATE POINT DE VENTE (field users) ---
     if (path === "/points-vente" && method === "POST") {
+      const denied = requirePermission("create_point_vente"); if (denied) return denied;
       const { name, address, city, latitude, longitude, secteur_id } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();

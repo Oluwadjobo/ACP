@@ -16,15 +16,15 @@ import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
 import { SuperviseurControleTerrain } from "@/pages/superviseur/SuperviseurControleTerrain";
-import type { UserType } from "@/types";
+import type { UserType, Permission } from "@/types";
 
 const fieldHome: Record<string, string> = {
   commercial: "/commercial",
   superviseur: "/superviseur",
 };
 
-function ProtectedRoute({ children, allow }: { children: React.ReactNode; allow: UserType }) {
-  const { token, userType, mustChangePassword, loading } = useAuth();
+function ProtectedRoute({ children, allow, permission }: { children: React.ReactNode; allow: UserType; permission?: Permission }) {
+  const { token, userType, mustChangePassword, loading, hasPermission } = useAuth();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -35,11 +35,12 @@ function ProtectedRoute({ children, allow }: { children: React.ReactNode; allow:
   if (!token) return <Navigate to="/" replace />;
   if (mustChangePassword) return <ChangePasswordPage />;
   if (userType !== allow) return <Navigate to={userType === "admin" ? "/admin" : fieldHome[userType!] || "/"} replace />;
+  if (permission && !hasPermission(permission)) return <Navigate to={userType === "admin" ? "/admin" : fieldHome[userType!] || "/"} replace />;
   return <>{children}</>;
 }
 
 function RootRedirect() {
-  const { token, userType, mustChangePassword, loading } = useAuth();
+  const { token, userType, mustChangePassword, loading, hasPermission } = useAuth();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -49,7 +50,13 @@ function RootRedirect() {
   }
   if (token && userType) {
     if (mustChangePassword) return <ChangePasswordPage />;
-    return <Navigate to={userType === "admin" ? "/admin" : fieldHome[userType] || "/"} replace />;
+    if (userType === "admin") return <Navigate to="/admin" replace />;
+    // Redirect to first accessible page
+    if (hasPermission("scan")) return <Navigate to={fieldHome[userType] || "/"} replace />;
+    if (hasPermission("view_history")) return <Navigate to={`${fieldHome[userType] || ""}/historique`} replace />;
+    if (userType === "superviseur" && hasPermission("view_ventes_non_realisees")) return <Navigate to="/superviseur/ventes-non-realisees" replace />;
+    if (userType === "superviseur" && hasPermission("control_terrain")) return <Navigate to="/superviseur/controle-terrain" replace />;
+    return <Navigate to={fieldHome[userType] || "/"} replace />;
   }
   return <LoginPage />;
 }
@@ -60,25 +67,25 @@ function AppRoutes() {
       <Route path="/" element={<RootRedirect />} />
 
       {/* Admin routes */}
-      <Route path="/admin" element={<ProtectedRoute allow="admin"><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/carte" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCarte /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/secteurs" element={<ProtectedRoute allow="admin"><AdminLayout><AdminSecteurs /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/bons-livraison" element={<ProtectedRoute allow="admin"><AdminLayout><AdminBonsLivraison /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/admins" element={<ProtectedRoute allow="admin"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/produits" element={<ProtectedRoute allow="admin"><AdminLayout><AdminProduits /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/points-vente" element={<ProtectedRoute allow="admin"><AdminLayout><AdminPointsVente /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute allow="admin" permission="view_dashboard"><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/carte" element={<ProtectedRoute allow="admin" permission="view_carte"><AdminLayout><AdminCarte /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/secteurs" element={<ProtectedRoute allow="admin" permission="manage_secteurs"><AdminLayout><AdminSecteurs /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/bons-livraison" element={<ProtectedRoute allow="admin" permission="manage_bons_livraison"><AdminLayout><AdminBonsLivraison /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin" permission="manage_commerciaux"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin" permission="manage_superviseurs"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/admins" element={<ProtectedRoute allow="admin" permission="manage_admins"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/produits" element={<ProtectedRoute allow="admin" permission="manage_produits"><AdminLayout><AdminProduits /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/points-vente" element={<ProtectedRoute allow="admin" permission="manage_points_vente"><AdminLayout><AdminPointsVente /></AdminLayout></ProtectedRoute>} />
 
       {/* Commercial routes */}
-      <Route path="/commercial" element={<ProtectedRoute allow="commercial"><FieldScanner /></ProtectedRoute>} />
-      <Route path="/commercial/historique" element={<ProtectedRoute allow="commercial"><FieldHistory /></ProtectedRoute>} />
+      <Route path="/commercial" element={<ProtectedRoute allow="commercial" permission="scan"><FieldScanner /></ProtectedRoute>} />
+      <Route path="/commercial/historique" element={<ProtectedRoute allow="commercial" permission="view_history"><FieldHistory /></ProtectedRoute>} />
 
       {/* Superviseur routes */}
-      <Route path="/superviseur" element={<ProtectedRoute allow="superviseur"><FieldScanner /></ProtectedRoute>} />
-      <Route path="/superviseur/historique" element={<ProtectedRoute allow="superviseur"><FieldHistory /></ProtectedRoute>} />
-      <Route path="/superviseur/ventes-non-realisees" element={<ProtectedRoute allow="superviseur"><SuperviseurVentesNonRealisees /></ProtectedRoute>} />
-      <Route path="/superviseur/controle-terrain" element={<ProtectedRoute allow="superviseur"><SuperviseurControleTerrain /></ProtectedRoute>} />
+      <Route path="/superviseur" element={<ProtectedRoute allow="superviseur" permission="scan"><FieldScanner /></ProtectedRoute>} />
+      <Route path="/superviseur/historique" element={<ProtectedRoute allow="superviseur" permission="view_history"><FieldHistory /></ProtectedRoute>} />
+      <Route path="/superviseur/ventes-non-realisees" element={<ProtectedRoute allow="superviseur" permission="view_ventes_non_realisees"><SuperviseurVentesNonRealisees /></ProtectedRoute>} />
+      <Route path="/superviseur/controle-terrain" element={<ProtectedRoute allow="superviseur" permission="control_terrain"><SuperviseurControleTerrain /></ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

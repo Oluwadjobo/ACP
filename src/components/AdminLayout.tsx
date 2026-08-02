@@ -2,29 +2,33 @@ import { type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import type { Permission } from "@/types";
 
 interface NavItem {
   path: string;
   label: string;
   icon: typeof LayoutDashboard;
+  permission: Permission;
 }
 
-const navItems: NavItem[] = [
-  { path: "/admin", label: "Tableau de bord", icon: LayoutDashboard },
-  { path: "/admin/carte", label: "Carte", icon: MapIcon },
-  { path: "/admin/secteurs", label: "Tournées", icon: MapPin },
-  { path: "/admin/commerciaux", label: "Commerciaux", icon: Users },
-  { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog },
-  { path: "/admin/admins", label: "Administrateurs", icon: Shield },
-  { path: "/admin/produits", label: "Produits", icon: Package },
-  { path: "/admin/points-vente", label: "Points de vente", icon: Store },
-  { path: "/admin/bons-livraison", label: "Bons de livraison", icon: FileText },
+const allNavItems: NavItem[] = [
+  { path: "/admin", label: "Tableau de bord", icon: LayoutDashboard, permission: "view_dashboard" },
+  { path: "/admin/carte", label: "Carte", icon: MapIcon, permission: "view_carte" },
+  { path: "/admin/secteurs", label: "Tournées", icon: MapPin, permission: "manage_secteurs" },
+  { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
+  { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
+  { path: "/admin/admins", label: "Administrateurs", icon: Shield, permission: "manage_admins" },
+  { path: "/admin/produits", label: "Produits", icon: Package, permission: "manage_produits" },
+  { path: "/admin/points-vente", label: "Points de vente", icon: Store, permission: "manage_points_vente" },
+  { path: "/admin/bons-livraison", label: "Bons de livraison", icon: FileText, permission: "manage_bons_livraison" },
 ];
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { fullName, logout } = useAuth();
+  const { fullName, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const navItems = allNavItems.filter((item) => hasPermission(item.permission));
 
   const handleLogout = async () => {
     await logout();
