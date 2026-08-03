@@ -16,6 +16,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
 const MAX_DISTANCE_METERS = 30;
+const MAX_GPS_ACCURACY_METERS = 15;
 
 const VENTE_MOTIFS = [
   "Rupture de stock",
@@ -629,7 +630,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
       const { data, error, count } = await supabase
-        .from("visites").select(`id, visited_at, latitude, longitude, distance_meters, status, vente_status, motif, user_role,
+        .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
           commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
       if (error) return jsonError(500, "Erreur de lecture");
@@ -742,17 +743,23 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- RECORD VISIT ---
     if (path === "/visites" && method === "POST") {
       const denied = requirePermission("scan"); if (denied) return denied;
-      const { point_vente_id, latitude, longitude } = await req.json();
+      const { point_vente_id, latitude, longitude, accuracy } = await req.json();
       if (!point_vente_id || latitude == null || longitude == null) return jsonError(400, "Données de visite incomplètes");
       const { data: pv, error: pvError } = await supabase.from("points_vente").select("id, latitude, longitude, name").eq("id", point_vente_id).maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
       const distance = haversineMeters(Number(latitude), Number(longitude), pv.latitude, pv.longitude);
+      const acc = accuracy != null ? Number(accuracy) : null;
+
+      // GPS accuracy gate: reject if signal too imprecise
+      if (acc != null && acc > MAX_GPS_ACCURACY_METERS) {
+        return jsonResponse({ status: "poor_gps", accuracy: acc, message: "Signal GPS insuffisant. Veuillez patienter quelques secondes ou vous déplacer dans une zone mieux couverte avant de réessayer." }, 200);
+      }
 
       if (distance > MAX_DISTANCE_METERS) {
-        const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", user_role: userRole };
+        const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", user_role: userRole };
         if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
         await supabase.from("visites").insert(insertData);
-        return jsonResponse({ status: "out_of_zone", distance, message: "Vous êtes trop éloigné du point de vente. Approchez-vous à moins de 30 mètres pour enregistrer votre présence.", debug: { userLat: Number(latitude), userLon: Number(longitude), pointLat: pv.latitude, pointLon: pv.longitude, pointName: pv.name } }, 200);
+        return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, message: "Vous êtes situé à plus de 30 mètres du point de vente. Rapprochez-vous puis réessayez.", debug: { userLat: Number(latitude), userLon: Number(longitude), pointLat: pv.latitude, pointLon: pv.longitude, pointName: pv.name } }, 200);
       }
 
       const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
@@ -761,11 +768,11 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data: recent } = await dedupQuery.maybeSingle();
       if (recent) return jsonResponse({ status: "duplicate", message: `Une visite a déjà été enregistrée à ce point il y a moins de ${DOUBLE_SCAN_MINUTES} minutes.`, lastVisit: recent.visited_at }, 200);
 
-      const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), distance_meters: distance, status: "confirmed", vente_status: "confirmed", user_role: userRole };
+      const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "confirmed", vente_status: "confirmed", user_role: userRole };
       if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
       const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
       if (insertError) return jsonError(500, `Erreur lors de l'enregistrement: ${insertError.message}`);
-      return jsonResponse({ status: "confirmed", distance, visit }, 201);
+      return jsonResponse({ status: "confirmed", distance, accuracy: acc, visit }, 201);
     }
 
     // --- FINALIZE VISIT ---
@@ -908,7 +915,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- MY VISITES ---
     if (path === "/mes-visites" && method === "GET") {
       const denied = requirePermission("view_history"); if (denied) return denied;
-      let query = supabase.from("visites").select(`id, visited_at, distance_meters, status, vente_status, motif, user_role, point_vente:points_vente(name, city, address)`).order("visited_at", { ascending: false });
+      let query = supabase.from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role, point_vente:points_vente(name, city, address)`).order("visited_at", { ascending: false });
       if (userRole === "commercial") query = query.eq("commercial_id", userId); else query = query.eq("superviseur_id", userId);
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de lecture");

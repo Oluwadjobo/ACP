@@ -136,6 +136,7 @@ export interface Visite {
   visited_at: string;
   latitude: number;
   longitude: number;
+  accuracy: number | null;
   distance_meters: number;
   status: string;
   vente_status: VenteStatus | null;
@@ -252,8 +253,9 @@ export interface DashboardStats {
 }
 
 export interface VisitResult {
-  status: "confirmed" | "out_of_zone" | "duplicate";
+  status: "confirmed" | "out_of_zone" | "duplicate" | "poor_gps";
   distance?: number;
+  accuracy?: number;
   message?: string;
   visit?: {
     id: string;

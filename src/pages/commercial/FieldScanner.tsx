@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
 import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
@@ -111,7 +111,7 @@ export function FieldScanner() {
       const position = await getAccuratePosition(20000, 15);
 
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude });
+      const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
 
       setResult(visitResult);
       setGpsStatus(null);
@@ -145,7 +145,7 @@ export function FieldScanner() {
     try {
       const position = await getAccuratePosition(20000, 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitResult = await api.recordVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude });
+      const visitResult = await api.recordVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
       setResult(visitResult);
       setGpsStatus(null);
       if (visitResult.status === "confirmed") {
@@ -535,6 +535,29 @@ export function FieldScanner() {
                 <h1 className="text-2xl font-bold text-gray-900 mb-2">Scan déjà effectué</h1>
                 <p className="text-gray-500 text-sm mb-6">{result.message}</p>
                 <button onClick={reset} className="btn-primary w-full"><ScanLine size={18} /> Scanner un autre point</button>
+              </div>
+            )}
+
+            {result.status === "poor_gps" && (
+              <div className="text-center">
+                <div className="w-24 h-24 rounded-full bg-warning-50 flex items-center justify-center mx-auto mb-5"><Satellite size={52} className="text-warning-600" /></div>
+                <h1 className="text-2xl font-bold text-gray-900 mb-2">Signal GPS insuffisant</h1>
+                <p className="text-gray-500 text-sm mb-4">{result.message}</p>
+                {result.accuracy != null && (
+                  <div className="card p-4 mb-6">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-500 flex items-center gap-1.5"><MapPin size={14} /> Précision actuelle</span>
+                      <span className="font-bold text-warning-600">±{Math.round(result.accuracy)} m</span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-2 text-center">Une précision de 15 m ou moins est requise pour valider le scan.</p>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <button onClick={retryGps} disabled={retrying} className="btn-primary w-full">
+                    {retrying ? <><Loader2 size={18} className="animate-spin" /> Nouvelle tentative GPS...</> : <><MapPin size={18} /> Réessayer avec le GPS</>}
+                  </button>
+                  <button onClick={reset} disabled={retrying} className="btn-secondary w-full"><ScanLine size={18} /> Scanner un autre point</button>
+                </div>
               </div>
             )}
           </div>

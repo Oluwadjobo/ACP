@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Clock, CheckCircle2, AlertTriangle, History, Store, TrendingUp, TrendingDown, Package } from "lucide-react";
+import { ArrowLeft, MapPin, Clock, CheckCircle2, AlertTriangle, History, Store, TrendingUp, TrendingDown, Package, Satellite } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Visite } from "@/types";
 import { useAuth } from "@/lib/auth";
@@ -80,6 +80,7 @@ export function FieldHistory() {
                       <div className="flex items-center gap-3 text-xs text-gray-400 mt-2">
                         <span className="flex items-center gap-1"><Clock size={12} />{formatDate(v.visited_at)} à {formatTime(v.visited_at)}</span>
                         <span className="flex items-center gap-1"><MapPin size={12} />{Math.round(v.distance_meters)} m</span>
+                        {v.accuracy != null && <span className="flex items-center gap-1"><Satellite size={12} />±{Math.round(v.accuracy)} m</span>}
                       </div>
                       {v.motif && <p className="text-xs text-error-500 mt-1.5">Motif : {v.motif}</p>}
                     </div>

@@ -267,7 +267,7 @@ export const api = {
       { method: "POST", body: JSON.stringify({ qr_token }) }
     ),
 
-  recordVisit: (body: { point_vente_id: string; latitude: number; longitude: number }) =>
+  recordVisit: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy?: number }) =>
     apiRequest<import("@/types").VisitResult>("/visites", {
       method: "POST",
       body: JSON.stringify(body),

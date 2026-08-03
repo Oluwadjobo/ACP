@@ -26,7 +26,7 @@ export function getAccuratePosition(
       resolved = true;
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       if (pos) resolve(pos);
-      else reject(new Error("Aucune position GPS obtenue"));
+      else reject(new Error("Impossible d'obtenir votre position actuelle. Vérifiez que le GPS est activé."));
     };
 
     watchId = navigator.geolocation.watchPosition(
@@ -50,8 +50,11 @@ export function getAccuratePosition(
       },
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {
-          finish(null);
-          reject(new Error("Accès à la position refusé. Autorisez le GPS pour valider votre présence."));
+          if (resolved) return;
+          resolved = true;
+          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+          reject(new Error("Accès à la localisation refusé. Veuillez autoriser la géolocalisation pour utiliser l'application."));
+          return;
         } else if (err.code === err.POSITION_UNAVAILABLE) {
           // Don't reject yet — we might still get a reading
         } else if (err.code === err.TIMEOUT) {
