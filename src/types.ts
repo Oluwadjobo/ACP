@@ -151,8 +151,6 @@ export interface VenteLigne {
   produit_id: string | null;
   produit_nom: string;
   quantite: number;
-  prix_unitaire: number;
-  montant: number;
   observation?: string;
 }
 

@@ -282,7 +282,7 @@ export const api = {
   createVente: (body: {
     visite_id: string;
     point_vente_id: string;
-    lignes: { produit_nom: string; quantite: number; prix_unitaire?: number; observation?: string }[];
+    lignes: { produit_id: string; produit_nom: string; quantite: number; observation?: string }[];
     livraison_immédiate?: boolean;
     observation?: string;
   }) =>

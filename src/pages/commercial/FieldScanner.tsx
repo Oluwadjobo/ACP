@@ -11,7 +11,7 @@ import { getAccuratePosition } from "@/lib/gps";
 type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
 type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | "promesse_achat" | null;
 
-type VenteLigneForm = { produit_nom: string; quantite: number; prix_unitaire: number; observation: string };
+type VenteLigneForm = { produit_id: string; produit_nom: string; quantite: number; observation: string };
 
 export function FieldScanner() {
   const { fullName, userType, hasPermission } = useAuth();
@@ -46,7 +46,7 @@ export function FieldScanner() {
   const [submitting, setSubmitting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   // Multi-product vente
-  const [venteLignes, setVenteLignes] = useState<VenteLigneForm[]>([{ produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }]);
+  const [venteLignes, setVenteLignes] = useState<VenteLigneForm[]>([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]);
   const [venteObservation, setVenteObservation] = useState("");
   const [blNumero, setBlNumero] = useState<string | null>(null);
 
@@ -133,7 +133,7 @@ export function FieldScanner() {
     setResult(null); setPointName(null); setPointId(null); setError(null); setGpsStatus(null);
     setState("idle"); scannedRef.current = false;
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
-    setVenteLignes([{ produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }]); setVenteObservation(""); setBlNumero(null);
+    setVenteLignes([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]); setVenteObservation(""); setBlNumero(null);
     setRetrying(false);
   };
 
@@ -185,12 +185,12 @@ export function FieldScanner() {
         await api.finalizeVisit({ visite_id: result.visit.id, vente_status: postAction, motif: finalMotif });
       } else if (postAction === "vente_realisee" || postAction === "vente_livraison") {
         // Validate lignes
-        const validLignes = venteLignes.filter((l) => l.produit_nom.trim() && l.quantite > 0);
+        const validLignes = venteLignes.filter((l) => l.produit_id && l.quantite > 0);
         if (validLignes.length === 0) { setSubmitting(false); return; }
         const res = await api.createVente({
           visite_id: result.visit.id,
           point_vente_id: pointId,
-          lignes: validLignes.map((l) => ({ produit_nom: l.produit_nom.trim(), quantite: l.quantite, prix_unitaire: l.prix_unitaire, observation: l.observation || undefined })),
+          lignes: validLignes.map((l) => ({ produit_id: l.produit_id, produit_nom: l.produit_nom, quantite: l.quantite, observation: l.observation || undefined })),
           livraison_immédiate: postAction === "vente_livraison",
           observation: venteObservation || undefined,
         });
@@ -389,18 +389,19 @@ export function FieldScanner() {
                         )}
                       </div>
                       <div>
-                        <label className="label text-xs">Nom du produit</label>
-                        <input list="produits-list" className="input" value={ligne.produit_nom} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, produit_nom: e.target.value }; setVenteLignes(next); }} placeholder="Nom du produit" />
+                        <label className="label text-xs">Produit</label>
+                        <select className="input" value={ligne.produit_id} onChange={(e) => {
+                          const prod = produits.find((p) => p.id === e.target.value);
+                          const next = [...venteLignes]; next[idx] = { ...ligne, produit_id: e.target.value, produit_nom: prod?.nom ?? "" };
+                          setVenteLignes(next);
+                        }}>
+                          <option value="">Sélectionner un produit</option>
+                          {produits.map((p) => <option key={p.id} value={p.id}>{p.nom}</option>)}
+                        </select>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="label text-xs">Quantité</label>
-                          <input type="number" min={1} className="input" value={ligne.quantite} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, quantite: Number(e.target.value) }; setVenteLignes(next); }} />
-                        </div>
-                        <div>
-                          <label className="label text-xs">Prix unitaire (facultatif)</label>
-                          <input type="number" step="0.01" className="input" value={ligne.prix_unitaire} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, prix_unitaire: Number(e.target.value) }; setVenteLignes(next); }} />
-                        </div>
+                      <div>
+                        <label className="label text-xs">Quantité</label>
+                        <input type="number" min={1} className="input" value={ligne.quantite} onChange={(e) => { const next = [...venteLignes]; next[idx] = { ...ligne, quantite: Number(e.target.value) }; setVenteLignes(next); }} />
                       </div>
                       <div>
                         <label className="label text-xs">Observation (facultatif)</label>
@@ -409,20 +410,17 @@ export function FieldScanner() {
                     </div>
                   ))}
                 </div>
-                <button onClick={() => setVenteLignes([...venteLignes, { produit_nom: "", quantite: 1, prix_unitaire: 0, observation: "" }])} className="btn-secondary w-full text-sm flex items-center justify-center gap-1.5">
+                <button onClick={() => setVenteLignes([...venteLignes, { produit_id: "", produit_nom: "", quantite: 1, observation: "" }])} className="btn-secondary w-full text-sm flex items-center justify-center gap-1.5">
                   <Plus size={16} /> Ajouter un produit
                 </button>
                 <div>
                   <label className="label">Observation générale (facultatif)</label>
                   <textarea className="input min-h-[60px]" value={venteObservation} onChange={(e) => setVenteObservation(e.target.value)} />
                 </div>
-                <datalist id="produits-list">
-                  {produits.map((p) => <option key={p.id} value={p.nom} />)}
-                </datalist>
                 {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700">{error}</div>}
                 <div className="flex gap-3">
                   <button onClick={() => { setPostAction(null); setError(null); }} className="btn-secondary flex-1">Retour</button>
-                  <button onClick={handlePostAction} disabled={submitting || venteLignes.every((l) => !l.produit_nom.trim())} className="btn-primary flex-1">{submitting ? "Enregistrement..." : "Valider"}</button>
+                  <button onClick={handlePostAction} disabled={submitting || venteLignes.every((l) => !l.produit_id || l.quantite <= 0)} className="btn-primary flex-1">{submitting ? "Enregistrement..." : "Valider"}</button>
                 </div>
               </div>
             )}

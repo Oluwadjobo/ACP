@@ -658,7 +658,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data, error, count } = await supabase
         .from("ventes").select(`id, visite_id, commercial_id, superviseur_id, point_vente_id, secteur_id, montant_total, observation, created_at,
           commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city, address),
-          lignes:vente_lignes(produit_nom, quantite, prix_unitaire, montant, observation)`, { count: "exact" })
+          lignes:vente_lignes(produit_id, produit_nom, quantite, observation)`, { count: "exact" })
         .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse({ data, count: count || 0, page, pageSize });
@@ -803,6 +803,23 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!visite_id || !point_vente_id || !Array.isArray(lignes) || lignes.length === 0)
         return jsonError(400, "Visite, point de vente et au moins une ligne de produit requis");
 
+      // Validate every ligne has a valid produit_id and quantite > 0
+      for (const l of lignes) {
+        if (!l.produit_id || typeof l.produit_id !== "string")
+          return jsonError(400, "Chaque ligne doit référencer un produit du catalogue");
+        if (!Number.isFinite(Number(l.quantite)) || Number(l.quantite) <= 0)
+          return jsonError(400, "La quantité doit être supérieure à zéro");
+      }
+
+      // Fetch all produit_ids from the catalogue to verify they exist
+      const produitIds = [...new Set(lignes.map((l: Record<string, unknown>) => String(l.produit_id)))];
+      const { data: validProduits, error: produitError } = await supabase.from("produits").select("id, nom").in("id", produitIds);
+      if (produitError) return jsonError(500, "Erreur lors de la vérification des produits");
+      const validMap = new Map((validProduits ?? []).map((p: Record<string, unknown>) => [String(p.id), String(p.nom)]));
+      for (const id of produitIds) {
+        if (!validMap.has(id)) return jsonError(400, "Un produit sélectionné n'existe pas dans le catalogue");
+      }
+
       // Ownership check on visite
       const ownerFilter = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
       const { data: visite } = await supabase.from("visites").select("id").match(ownerFilter).maybeSingle();
@@ -818,16 +835,9 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       if (!secteur_id) secteur_id = await getPointVenteSecteur(point_vente_id);
 
-      // Calculate montant_total
-      const montant_total = lignes.reduce((sum: number, l: Record<string, unknown>) => {
-        const q = Number(l.quantite) || 0;
-        const pu = Number(l.prix_unitaire) || 0;
-        return sum + q * pu;
-      }, 0);
-
-      // Insert vente
+      // Insert vente (no price — managed centrally)
       const venteInsert: Record<string, unknown> = {
-        visite_id, point_vente_id, montant_total: Math.round(montant_total * 100) / 100,
+        visite_id, point_vente_id, montant_total: 0,
         observation: observation?.trim() || null,
       };
       if (userRole === "commercial") venteInsert.commercial_id = userId; else venteInsert.superviseur_id = userId;
@@ -838,10 +848,11 @@ async function handleRoute(req: Request): Promise<Response> {
       // Insert lignes
       const lignesData = lignes.map((l: Record<string, unknown>) => ({
         vente_id: vente.id,
-        produit_nom: String(l.produit_nom).trim(),
+        produit_id: String(l.produit_id),
+        produit_nom: validMap.get(String(l.produit_id)) || String(l.produit_nom || "").trim(),
         quantite: Number(l.quantite) || 1,
-        prix_unitaire: Number(l.prix_unitaire) || 0,
-        montant: Math.round((Number(l.quantite) || 0) * (Number(l.prix_unitaire) || 0) * 100) / 100,
+        prix_unitaire: 0,
+        montant: 0,
         observation: l.observation?.trim() || null,
       }));
       const { error: lignesError } = await supabase.from("vente_lignes").insert(lignesData);
@@ -862,7 +873,8 @@ async function handleRoute(req: Request): Promise<Response> {
       // Insert BL lignes
       const blLignesData = lignes.map((l: Record<string, unknown>) => ({
         bl_id: bl!.id,
-        produit_nom: String(l.produit_nom).trim(),
+        produit_id: String(l.produit_id),
+        produit_nom: validMap.get(String(l.produit_id)) || String(l.produit_nom || "").trim(),
         quantite: Number(l.quantite) || 1,
         unite: "unité",
         observation: l.observation?.trim() || null,
