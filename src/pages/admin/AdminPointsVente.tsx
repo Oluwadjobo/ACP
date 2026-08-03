@@ -212,6 +212,11 @@ function PointVenteModal({
               <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
             ))}
           </select>
+          {secteurs.length === 0 && (
+            <p className="text-xs text-warning-600 mt-1">
+              Aucune tournée disponible pour votre profil. Veuillez contacter un administrateur.
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>

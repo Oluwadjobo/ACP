@@ -975,6 +975,26 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
 
+    // --- SECTEURS LIST (team leaders: only their assigned tournées) ---
+    if (path === "/secteurs" && method === "GET") {
+      const denied = requirePermission("create_point_vente");
+      if (denied) return denied;
+      const { data: tltRows, error: tltError } = await supabase
+        .from("team_leader_tournees")
+        .select("secteur_id")
+        .eq("superviseur_id", session.user_id);
+      if (tltError) return jsonError(500, "Erreur lors de la récupération des tournées");
+      const secteurIds = (tltRows ?? []).map((r: Record<string, unknown>) => String(r.secteur_id));
+      if (secteurIds.length === 0) return jsonResponse([]);
+      const { data: secteurs, error: secError } = await supabase
+        .from("secteurs")
+        .select("*")
+        .in("id", secteurIds)
+        .order("created_at", { ascending: false });
+      if (secError) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(secteurs);
+    }
+
     // --- CREATE POINT DE VENTE (field users) ---
     if (path === "/points-vente" && method === "POST") {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
