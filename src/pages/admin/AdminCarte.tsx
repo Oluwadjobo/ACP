@@ -65,15 +65,21 @@ export function AdminCarte() {
     };
   }, []);
 
-  // Fullscreen handling
+  // Fullscreen handling — update state when fullscreen changes
   useEffect(() => {
     const onFsChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
-      setTimeout(() => mapRef.current?.invalidateSize(), 200);
     };
     document.addEventListener("fullscreenchange", onFsChange);
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
+
+  // After isFullscreen state changes and DOM re-renders, tell Leaflet the
+  // container resized so it redraws tiles correctly.
+  useEffect(() => {
+    const t = setTimeout(() => mapRef.current?.invalidateSize(), 250);
+    return () => clearTimeout(t);
+  }, [isFullscreen]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -134,7 +140,7 @@ export function AdminCarte() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in" ref={fullscreenRef}>
+    <div className={`space-y-6 animate-fade-in ${isFullscreen ? "h-screen overflow-hidden bg-white p-4" : ""}`} ref={fullscreenRef}>
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
