@@ -41,6 +41,54 @@ const VENTE_NON_REALISEE_MOTIFS = [
 const CONTROLE_NOTATIONS = ["excellent", "bon", "moyen", "faible", "critique"];
 const BL_STATUTS = ["en_attente", "livre", "partiel", "annule"];
 
+// Well-spaced palette for tournées — colors are visually very distinct
+// so no two tournées can be confused even when displayed simultaneously.
+const SECTEUR_PALETTE = [
+  "#E63946", // rouge vif
+  "#1D6FB8", // bleu vif
+  "#2A9D3F", // vert vif
+  "#F18E00", // orange vif
+  "#7B2CBF", // violet
+  "#06A6A6", // turquoise
+  "#D81B8A", // rose fuchsia
+  "#F1C40F", // jaune intense
+  "#7B4A2B", // marron
+  "#17A2B8", // cyan
+];
+
+// Minimal color-distance helper (weighted Euclidean in RGB) to ensure a
+// newly assigned color is sufficiently different from those already used.
+function colorDistance(a: string, b: string): number {
+  const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
+  const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
+  return Math.sqrt(
+    Math.pow(pa[0] - pb[0], 2) + Math.pow(pa[1] - pb[1], 2) + Math.pow(pa[2] - pb[2], 2)
+  );
+}
+
+function pickSecteurColor(usedColors: string[]): string {
+  if (usedColors.length === 0) return SECTEUR_PALETTE[0];
+  // Try palette colors first, pick the one with max min-distance from used colors
+  let best = SECTEUR_PALETTE[0];
+  let bestDist = -1;
+  for (const candidate of SECTEUR_PALETTE) {
+    if (!usedColors.includes(candidate)) {
+      const minDist = Math.min(...usedColors.map((c) => colorDistance(candidate, c)));
+      if (minDist > bestDist) { best = candidate; bestDist = minDist; }
+    }
+  }
+  // If all palette colors are used, fall back to the one with max min-distance
+  if (usedColors.includes(best)) {
+    best = SECTEUR_PALETTE[0];
+    bestDist = -1;
+    for (const candidate of SECTEUR_PALETTE) {
+      const minDist = Math.min(...usedColors.map((c) => colorDistance(candidate, c)));
+      if (minDist > bestDist) { best = candidate; bestDist = minDist; }
+    }
+  }
+  return best;
+}
+
 // ============ PERMISSION CATALOG ============
 
 const FIELD_PERMISSIONS = [
@@ -306,10 +354,18 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path === "/secteurs" && method === "POST") {
-      const { nom, code, description } = await req.json();
+      const { nom, code, description, color_code } = await req.json();
       if (!nom || !code) return jsonError(400, "Nom et code requis");
+      // Determine the color: use the provided one if valid, otherwise auto-assign
+      // the most distinct color from those already used.
+      const { data: existing } = await supabase.from("secteurs").select("color_code");
+      const usedColors = (existing ?? []).map((r: Record<string, unknown>) => String(r.color_code)).filter(Boolean);
+      const finalColor = (typeof color_code === "string" && /^#[0-9A-Fa-f]{6}$/.test(color_code))
+        ? color_code
+        : pickSecteurColor(usedColors);
       const { data, error } = await supabase.from("secteurs").insert({
         code: code.trim().toUpperCase(), nom: nom.trim(), description: description?.trim() || null,
+        color_code: finalColor,
       }).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Ce code existe déjà"); return jsonError(500, "Erreur lors de la création"); }
       return jsonResponse(data, 201);
@@ -322,6 +378,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.code !== undefined) updates.code = body.code.trim().toUpperCase();
       if (body.description !== undefined) updates.description = body.description?.trim() || null;
       if (body.actif !== undefined) updates.actif = body.actif;
+      if (typeof body.color_code === "string" && /^#[0-9A-Fa-f]{6}$/.test(body.color_code)) updates.color_code = body.color_code;
       const { data, error } = await supabase.from("secteurs").update(updates).eq("id", id).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Ce code existe déjà"); return jsonError(500, "Erreur lors de la modification"); }
       if (!data) return jsonError(404, "Secteur introuvable");

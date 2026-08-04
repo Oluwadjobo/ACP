@@ -55,6 +55,7 @@ export interface Secteur {
   nom: string;
   description: string | null;
   actif: boolean;
+  color_code: string;
   created_at: string;
 }
 

@@ -147,13 +147,13 @@ export const api = {
     method: "GET",
   }),
 
-  createSecteur: (body: { nom: string; code: string; description?: string }) =>
+  createSecteur: (body: { nom: string; code: string; description?: string; color_code?: string }) =>
     apiRequest<import("@/types").Secteur>("/secteurs", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateSecteur: (id: string, body: Partial<{ nom: string; code: string; description: string; actif: boolean }>) =>
+  updateSecteur: (id: string, body: Partial<{ nom: string; code: string; description: string; actif: boolean; color_code: string }>) =>
     apiRequest<import("@/types").Secteur>(`/secteurs/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),

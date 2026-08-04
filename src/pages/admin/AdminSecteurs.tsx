@@ -75,7 +75,9 @@ export function AdminSecteurs() {
           {secteurs.map((s) => (
             <div key={s.id} className={`card p-5 ${!s.actif ? "opacity-60" : ""}`}>
               <div className="flex items-start justify-between mb-3">
-                <div className="w-11 h-11 rounded-xl bg-primary-50 flex items-center justify-center"><MapPin size={20} className="text-primary-600" /></div>
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ backgroundColor: (s.color_code || '#E63946') + '22' }}>
+                  <span className="w-5 h-5 rounded-full" style={{ backgroundColor: s.color_code || '#E63946', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+                </div>
                 <div className="flex gap-1">
                   <button onClick={() => { setEditing(s); setShowModal(true); }} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-primary-600 transition-colors"><Pencil size={16} /></button>
                   <button onClick={() => handleToggle(s)} className={`p-2 rounded-lg hover:bg-gray-100 transition-colors ${s.actif ? "text-gray-500 hover:text-warning-600" : "text-gray-400 hover:text-success-600"}`} title={s.actif ? "Désactiver" : "Réactiver"}><Power size={16} /></button>
@@ -83,7 +85,7 @@ export function AdminSecteurs() {
                 </div>
               </div>
               <h3 className="font-bold text-gray-900 text-base">{s.nom}</h3>
-              <p className="text-xs text-primary-600 font-mono mt-0.5">{s.code}</p>
+              <p className="text-xs font-mono mt-0.5" style={{ color: s.color_code || '#E63946' }}>{s.code}</p>
               {s.description && <p className="text-sm text-gray-500 mt-2 line-clamp-2">{s.description}</p>}
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <span className={`badge ${s.actif ? "bg-success-50 text-success-700" : "bg-gray-100 text-gray-500"}`}>
@@ -118,14 +120,18 @@ function SecteurModal({
   const [nom, setNom] = useState("");
   const [code, setCode] = useState("");
   const [description, setDescription] = useState("");
+  const [color, setColor] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const PALETTE = ["#E63946", "#1D6FB8", "#2A9D3F", "#F18E00", "#7B2CBF", "#06A6A6", "#D81B8A", "#F1C40F", "#7B4A2B", "#17A2B8"];
 
   useEffect(() => {
     if (open) {
       setNom(editing?.nom || "");
       setCode(editing?.code || "");
       setDescription(editing?.description || "");
+      setColor(editing?.color_code || "");
       setError(null);
     }
   }, [open, editing]);
@@ -137,10 +143,10 @@ function SecteurModal({
     setError(null);
     try {
       if (editing) {
-        await api.updateSecteur(editing.id, { nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim() });
+        await api.updateSecteur(editing.id, { nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim(), color_code: color || undefined });
         showToast("success", "Tournée modifiée avec succès");
       } else {
-        await api.createSecteur({ nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim() });
+        await api.createSecteur({ nom: nom.trim(), code: code.trim().toUpperCase(), description: description.trim(), color_code: color || undefined });
         showToast("success", "Tournée créée avec succès");
       }
       onSaved();
@@ -166,6 +172,22 @@ function SecteurModal({
         <div>
           <label className="label">Description (optionnel)</label>
           <textarea className="input min-h-[70px]" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Zone géographique ou portefeuille..." />
+        </div>
+        <div>
+          <label className="label">Couleur de la tournée</label>
+          <div className="flex flex-wrap gap-2">
+            {PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(c)}
+                className={`w-8 h-8 rounded-full transition-transform ${color === c ? "ring-2 ring-offset-2 ring-gray-400 scale-110" : "hover:scale-110"}`}
+                style={{ backgroundColor: c, boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }}
+                title={c}
+              />
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">{color ? `Couleur sélectionnée : ${color}` : "Laissez vide pour une attribution automatique"}</p>
         </div>
         <div className="flex gap-3 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary flex-1">Annuler</button>
