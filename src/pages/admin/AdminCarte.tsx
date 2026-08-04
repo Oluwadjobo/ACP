@@ -65,29 +65,23 @@ export function AdminCarte() {
     };
   }, []);
 
-  // Fullscreen handling — update state when fullscreen changes
-  useEffect(() => {
-    const onFsChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener("fullscreenchange", onFsChange);
-    return () => document.removeEventListener("fullscreenchange", onFsChange);
-  }, []);
+  // Fullscreen is handled purely via CSS (position: fixed) rather than the
+  // native Fullscreen API, which causes timing issues with Leaflet's tile
+  // rendering. This approach is simpler and more reliable.
+  const toggleFullscreen = () => setIsFullscreen((v) => !v);
 
-  // After isFullscreen state changes and DOM re-renders, tell Leaflet the
-  // container resized so it redraws tiles correctly.
+  // After isFullscreen changes and the DOM re-renders with the new container
+  // size, tell Leaflet to recompute its dimensions so tiles redraw.
   useEffect(() => {
-    const t = setTimeout(() => mapRef.current?.invalidateSize(), 250);
-    return () => clearTimeout(t);
-  }, [isFullscreen]);
+    if (loading) return;
+    // Multiple pulses because the CSS transition may take a few frames
+    const t1 = setTimeout(() => mapRef.current?.invalidateSize(), 50);
+    const t2 = setTimeout(() => mapRef.current?.invalidateSize(), 200);
+    const t3 = setTimeout(() => mapRef.current?.invalidateSize(), 400);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [isFullscreen, loading]);
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      fullscreenRef.current?.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
-  };
+
 
   const filtered = useMemo(() => {
     if (!search) return points;
@@ -140,8 +134,15 @@ export function AdminCarte() {
   };
 
   return (
-    <div className={`space-y-6 animate-fade-in ${isFullscreen ? "h-screen overflow-hidden bg-white p-4" : ""}`} ref={fullscreenRef}>
-      <div className="flex items-start justify-between flex-wrap gap-4">
+    <div
+      className={`animate-fade-in ${
+        isFullscreen
+          ? "fixed inset-0 z-[9999] bg-white p-4 flex flex-col overflow-hidden"
+          : "space-y-6"
+      }`}
+      ref={fullscreenRef}
+    >
+      <div className="flex items-start justify-between flex-wrap gap-4 flex-shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <MapIcon size={26} className="text-primary-700" /> Carte des points de vente
@@ -160,10 +161,10 @@ export function AdminCarte() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${isFullscreen ? "flex-1 min-h-0 mt-4" : ""}`}>
         {/* Map */}
-        <div className="lg:col-span-2 card overflow-hidden p-0 relative">
-          <div ref={containerRef} className={`w-full ${isFullscreen ? "h-[calc(100vh-80px)]" : "h-[500px] lg:h-[600px]"}`} />
+        <div className={`card overflow-hidden p-0 relative ${isFullscreen ? "lg:col-span-2 h-full min-h-0" : "lg:col-span-2"}`}>
+          <div ref={containerRef} className={`w-full ${isFullscreen ? "h-full" : "h-[500px] lg:h-[600px]"}`} />
 
           {/* Legend overlay — simple, always visible, no toggles */}
           {secteurs.filter((s) => s.actif).length > 0 && (
