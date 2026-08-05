@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2 } from "lucide-react";
+import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
@@ -14,6 +14,43 @@ function createPinIcon(color: string): L.DivIcon {
   });
 }
 
+function createSelectedPinIcon(color: string, name: string): L.DivIcon {
+  const safe = name.replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="position:relative;transform:rotate(45deg);">
+        <div style="width:28px;height:28px;border-radius:50% 50% 50% 0;background:${color};border:3px solid #fff;box-shadow:0 0 0 3px ${color},0 4px 10px rgba(0,0,0,0.5);transform:rotate(-45deg);"></div>
+        <div style="position:absolute;bottom:100%;left:50%;transform:translateX(-50%) rotate(-45deg);white-space:nowrap;background:#fff;color:#1f2937;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.2);border:1.5px solid ${color};margin-bottom:4px;pointer-events:none;">${safe}</div>
+      </div>
+    `,
+    iconSize: [28, 28],
+    iconAnchor: [14, 28],
+  });
+}
+
+// Convex hull (Andrew's monotone chain) for zone polygons
+function convexHull(pts: [number, number][]): [number, number][] {
+  if (pts.length < 3) return pts;
+  const points = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: [number, number][] = [];
+  for (const p of points) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: [number, number][] = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  return lower.concat(upper);
+}
+
 export function AdminCarte() {
   const [points, setPoints] = useState<PointVente[]>([]);
   const [secteurs, setSecteurs] = useState<Secteur[]>([]);
@@ -21,10 +58,13 @@ export function AdminCarte() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<PointVente | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showZones, setShowZones] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fullscreenRef = useRef<HTMLDivElement | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const zoneLayerRef = useRef<L.LayerGroup | null>(null);
+  const markerMapRef = useRef<Map<string, L.Marker>>(new Map());
 
   useEffect(() => {
     Promise.all([api.listPointsVente(), api.listSecteurs()])
@@ -41,6 +81,17 @@ export function AdminCarte() {
     return m;
   }, [secteurs]);
 
+  // Count points per secteur
+  const countBySecteur = useMemo(() => {
+    const m: Record<string, number> = {};
+    points.forEach((p) => {
+      if (p.secteur_id) m[p.secteur_id] = (m[p.secteur_id] || 0) + 1;
+    });
+    return m;
+  }, [points]);
+
+  const activeSecteurs = useMemo(() => secteurs.filter((s) => s.actif), [secteurs]);
+
   // Init map
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -56,6 +107,7 @@ export function AdminCarte() {
       maxZoom: 19,
     }).addTo(map);
 
+    zoneLayerRef.current = L.layerGroup().addTo(map);
     markerLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
 
@@ -65,23 +117,15 @@ export function AdminCarte() {
     };
   }, []);
 
-  // Fullscreen is handled purely via CSS (position: fixed) rather than the
-  // native Fullscreen API, which causes timing issues with Leaflet's tile
-  // rendering. This approach is simpler and more reliable.
   const toggleFullscreen = () => setIsFullscreen((v) => !v);
 
-  // After isFullscreen changes and the DOM re-renders with the new container
-  // size, tell Leaflet to recompute its dimensions so tiles redraw.
   useEffect(() => {
     if (loading) return;
-    // Multiple pulses because the CSS transition may take a few frames
     const t1 = setTimeout(() => mapRef.current?.invalidateSize(), 50);
     const t2 = setTimeout(() => mapRef.current?.invalidateSize(), 200);
     const t3 = setTimeout(() => mapRef.current?.invalidateSize(), 400);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [isFullscreen, loading]);
-
-
 
   const filtered = useMemo(() => {
     if (!search) return points;
@@ -100,13 +144,18 @@ export function AdminCarte() {
     if (!map || loading) return;
 
     markerLayerRef.current?.clearLayers();
+    markerMapRef.current.clear();
     if (filtered.length === 0) return;
 
     const bounds: L.LatLngExpression[] = [];
 
     filtered.forEach((p) => {
       const color = (p.secteur_id && colorMap[p.secteur_id]) || "#6B7280";
-      const marker = L.marker([p.latitude, p.longitude], { icon: createPinIcon(color) })
+      const isSelected = selected?.id === p.id;
+      const icon = isSelected
+        ? createSelectedPinIcon(color, p.name)
+        : createPinIcon(color);
+      const marker = L.marker([p.latitude, p.longitude], { icon, zIndexOffset: isSelected ? 1000 : 0 })
         .bindPopup(
           `<div style="font-family:system-ui;padding:4px 2px;min-width:160px;">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
@@ -120,6 +169,7 @@ export function AdminCarte() {
         );
       marker.on("click", () => setSelected(p));
       marker.addTo(markerLayerRef.current!);
+      markerMapRef.current.set(p.id, marker);
       bounds.push([p.latitude, p.longitude]);
     });
 
@@ -128,10 +178,51 @@ export function AdminCarte() {
     }
   }, [filtered, loading, colorMap]);
 
+  // Update only the selected marker's icon without rebuilding all markers
+  useEffect(() => {
+    if (loading) return;
+    markerMapRef.current.forEach((marker, id) => {
+      const p = points.find((pp) => pp.id === id);
+      if (!p) return;
+      const color = (p.secteur_id && colorMap[p.secteur_id]) || "#6B7280";
+      const isSelected = selected?.id === id;
+      marker.setIcon(isSelected ? createSelectedPinIcon(color, p.name) : createPinIcon(color));
+      marker.setZIndexOffset(isSelected ? 1000 : 0);
+    });
+  }, [selected, colorMap, loading, points]);
+
+  // Render zones (convex hull per secteur)
+  useEffect(() => {
+    const layer = zoneLayerRef.current;
+    if (!layer) return;
+    layer.clearLayers();
+    if (!showZones || loading) return;
+
+    activeSecteurs.forEach((s) => {
+      const pts: [number, number][] = filtered
+        .filter((p) => p.secteur_id === s.id)
+        .map((p) => [p.latitude, p.longitude]);
+      if (pts.length < 3) return;
+      const hull = convexHull(pts);
+      if (hull.length < 3) return;
+      const color = s.color_code || "#E63946";
+      L.polygon(hull, {
+        color,
+        weight: 2,
+        opacity: 0.7,
+        fillColor: color,
+        fillOpacity: 0.12,
+        dashArray: "6 4",
+      }).addTo(layer);
+    });
+  }, [showZones, filtered, activeSecteurs, loading]);
+
   const flyTo = (p: PointVente) => {
     setSelected(p);
     mapRef.current?.flyTo([p.latitude, p.longitude], 17, { duration: 0.8 });
   };
+
+  const totalVisible = filtered.length;
 
   return (
     <div
@@ -151,14 +242,24 @@ export function AdminCarte() {
             Visualisez l'étendue de votre champ d'action géographique
           </p>
         </div>
-        <button
-          onClick={toggleFullscreen}
-          className="btn-ghost flex items-center gap-1.5"
-          title="Plein écran"
-        >
-          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          {isFullscreen ? "Réduire" : "Plein écran"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowZones((v) => !v)}
+            className={`btn-ghost flex items-center gap-1.5 ${showZones ? "!bg-primary-50 !text-primary-700" : ""}`}
+            title="Afficher / masquer les zones de tournée"
+          >
+            <Layers size={16} />
+            {showZones ? "Masquer les zones" : "Afficher les zones"}
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            className="btn-ghost flex items-center gap-1.5"
+            title="Plein écran"
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            {isFullscreen ? "Réduire" : "Plein écran"}
+          </button>
+        </div>
       </div>
 
       <div className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${isFullscreen ? "flex-1 min-h-0 mt-4" : ""}`}>
@@ -166,20 +267,34 @@ export function AdminCarte() {
         <div className={`card overflow-hidden p-0 relative ${isFullscreen ? "lg:col-span-2 h-full min-h-0" : "lg:col-span-2"}`}>
           <div ref={containerRef} className={`w-full ${isFullscreen ? "h-full" : "h-[500px] lg:h-[600px]"}`} />
 
-          {/* Legend overlay — simple, always visible, no toggles */}
-          {secteurs.filter((s) => s.actif).length > 0 && (
-            <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-gray-200 p-3 max-w-[200px]">
+          {/* Enriched legend — always visible */}
+          {activeSecteurs.length > 0 && (
+            <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-gray-200 p-3 w-[210px]">
               <span className="text-xs font-bold text-gray-700 uppercase tracking-wide block mb-2">Légende</span>
               <div className="space-y-1.5">
-                {secteurs.filter((s) => s.actif).map((s) => (
-                  <div key={s.id} className="flex items-center gap-2">
-                    <span
-                      className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white shadow-sm"
-                      style={{ backgroundColor: s.color_code || "#E63946" }}
-                    />
-                    <span className="text-xs font-medium text-gray-700 truncate">{s.nom}</span>
-                  </div>
-                ))}
+                {activeSecteurs.map((s) => {
+                  const count = countBySecteur[s.id] || 0;
+                  const color = s.color_code || "#E63946";
+                  return (
+                    <div key={s.id} className="flex items-center gap-2">
+                      <span
+                        className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white shadow-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="text-xs font-medium text-gray-700 truncate flex-1">{s.nom}</span>
+                      <span
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-md text-white flex-shrink-0"
+                        style={{ backgroundColor: color }}
+                      >
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-2 pt-2 border-t border-gray-200 flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
+                <span className="text-xs font-bold text-gray-900">{totalVisible}</span>
               </div>
             </div>
           )}
