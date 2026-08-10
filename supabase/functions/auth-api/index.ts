@@ -336,14 +336,17 @@ async function getCommercialSecteur(commercialId: string, teamId: string | null)
   if (teamId) query = query.eq("team_id", teamId);
   const { data } = await query.maybeSingle();
   const superviseur_id = data?.superviseur_id ?? null;
-  let secteur_id: string | null = null;
+  let assignedQuery = supabase.from("commercial_tournees").select("secteur_id").eq("commercial_id", commercialId).limit(1);
+  if (teamId) assignedQuery = assignedQuery.eq("team_id", teamId);
+  const { data: assigned } = await assignedQuery.maybeSingle();
+  if (assigned?.secteur_id) return { secteur_id: assigned.secteur_id, superviseur_id };
   if (superviseur_id) {
     let tltQuery = supabase.from("team_leader_tournees").select("secteur_id").eq("superviseur_id", superviseur_id).limit(1);
     if (teamId) tltQuery = tltQuery.eq("team_id", teamId);
     const { data: tlt } = await tltQuery.maybeSingle();
-    secteur_id = tlt?.secteur_id ?? null;
+    return { secteur_id: tlt?.secteur_id ?? null, superviseur_id };
   }
-  return { secteur_id, superviseur_id };
+  return { secteur_id: null, superviseur_id };
 }
 
 async function getSuperviseurSecteur(superviseurId: string, teamId: string | null): Promise<string | null> {
@@ -677,32 +680,39 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
       const enriched = await Promise.all((data || []).map(async (c: Record<string, unknown>) => {
-        let superviseur_nom = null, secteur_nom = null;
+        let superviseur_nom = null;
         if (c.superviseur_id) {
           const { data: sup } = await supabase.from("superviseurs").select("full_name").eq("id", c.superviseur_id).maybeSingle();
           superviseur_nom = sup?.full_name ?? null;
-          let tltQuery = supabase.from("team_leader_tournees").select("secteurs(nom)").eq("superviseur_id", c.superviseur_id).limit(1);
-          if (effectiveTeamId) tltQuery = tltQuery.eq("team_id", effectiveTeamId);
-          const { data: tlt } = await tltQuery.maybeSingle();
-          secteur_nom = (tlt?.secteurs as Record<string, unknown> | null)?.nom ?? null;
         }
-        return { ...c, superviseur_nom, secteur_nom };
+        let assignments = supabase.from("commercial_tournees").select("secteur_id, secteurs(nom, code)").eq("commercial_id", c.id);
+        if (effectiveTeamId) assignments = assignments.eq("team_id", effectiveTeamId);
+        const { data: assigned } = await assignments;
+        const tournees = (assigned ?? []).map((row: Record<string, unknown>) => {
+          const secteur = row.secteurs as Record<string, unknown> | null;
+          return { secteur_id: String(row.secteur_id), nom: secteur?.nom ?? null, code: secteur?.code ?? null };
+        });
+        return { ...c, superviseur_nom, secteur_nom: tournees[0]?.nom ?? null, tournees };
       }));
       return jsonResponse(enriched);
     }
     if (path === "/commerciaux" && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_commerciaux"); if (denied) return denied; }
-      const { identifiant, full_name, password, telephone, superviseur_id } = await req.json();
+      const { identifiant, full_name, password, telephone, superviseur_id, secteur_ids } = await req.json();
       if (!identifiant || !full_name || !password) return jsonError(400, "Identifiant, nom et mot de passe requis");
       if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       if (!superviseur_id) return jsonError(400, "Un superviseur de rattachement est obligatoire");
+      if (!Array.isArray(secteur_ids) || secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       const password_hash = await hashPassword(password);
       const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
       if (telephone) insertData.telephone = telephone.trim();
       if (superviseur_id) insertData.superviseur_id = superviseur_id;
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
-      const { data, error } = await supabase.from("commerciaux").insert(insertData).select("id, identifiant, full_name, active, telephone, superviseur_id, created_at").maybeSingle();
+      const { data, error } = await supabase.from("commerciaux").insert(insertData).select("id, identifiant, full_name, active, telephone, superviseur_id, team_id, created_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la création"); }
+      const assignments = secteur_ids.map((secteur_id: string) => ({ commercial_id: data.id, secteur_id, ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}) }));
+      const { error: assignmentError } = await supabase.from("commercial_tournees").insert(assignments);
+      if (assignmentError) return jsonError(500, "Erreur lors de l'affectation des tournées");
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/commerciaux/") && method === "PUT") {
@@ -715,11 +725,21 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.active !== undefined) updates.active = body.active;
       if (body.telephone !== undefined) updates.telephone = body.telephone?.trim() || null;
       if (body.superviseur_id !== undefined) updates.superviseur_id = body.superviseur_id || null;
+      if (body.secteur_ids !== undefined && Array.isArray(body.secteur_ids) && body.secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       let query = supabase.from("commerciaux").update(updates).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query.select("id, identifiant, full_name, active, telephone, superviseur_id, created_at, updated_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la modification"); }
       if (!data) return jsonError(404, "Commercial introuvable");
+      if (Array.isArray(body.secteur_ids)) {
+        let remove = supabase.from("commercial_tournees").delete().eq("commercial_id", id);
+        if (effectiveTeamId) remove = remove.eq("team_id", effectiveTeamId);
+        const { error: removeError } = await remove;
+        if (removeError) return jsonError(500, "Erreur lors de la mise à jour des tournées");
+        const assignments = body.secteur_ids.map((secteur_id: string) => ({ commercial_id: id, secteur_id, ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}) }));
+        const { error: assignmentError } = await supabase.from("commercial_tournees").insert(assignments);
+        if (assignmentError) return jsonError(500, "Erreur lors de la mise à jour des tournées");
+      }
       return jsonResponse(data);
     }
     if (path.startsWith("/commerciaux/") && path.endsWith("/reset-password") && method === "POST") {

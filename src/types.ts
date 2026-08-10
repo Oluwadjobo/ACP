@@ -83,6 +83,7 @@ export interface Commercial {
   superviseur_id?: string | null;
   superviseur_nom?: string | null;
   secteur_nom?: string | null;
+  tournees?: SuperviseurTournee[];
   team_id?: string | null;
   permissions?: Permissions;
   created_at: string;
