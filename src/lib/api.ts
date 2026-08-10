@@ -13,6 +13,8 @@ function getToken(): string | null {
   return localStorage.getItem("session_token");
 }
 
+let teamsPromise: Promise<import("@/types").Team[]> | null = null;
+
 async function apiRequest<T>(
   path: string,
   options: RequestInit = {}
@@ -42,7 +44,12 @@ async function apiRequest<T>(
 
 export const api = {
   // Teams
-  listTeams: () => apiRequest<import("@/types").Team[]>("/teams", { method: "GET" }),
+  listTeams: () => {
+    if (!teamsPromise) {
+      teamsPromise = apiRequest<import("@/types").Team[]>("/teams", { method: "GET" });
+    }
+    return teamsPromise;
+  },
 
   // Auth
   login: (body: { login: string; password: string; teamCode?: string }) =>
@@ -54,13 +61,15 @@ export const api = {
       mustChangePassword?: boolean;
       teamId: string | null;
       role: string;
+      teamCode?: string | null;
+      teamColor?: string | null;
       permissions: Record<string, boolean>;
     }>("/login", { method: "POST", body: JSON.stringify({ login: body.login, password: body.password, team_code: body.teamCode }) }),
 
   logout: () => apiRequest<{ success: boolean }>("/logout", { method: "POST" }),
 
   me: () =>
-    apiRequest<{ userType: string; userId: string; fullName: string; teamId: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
+    apiRequest<{ userType: string; userId: string; fullName: string; teamId: string | null; teamCode?: string | null; teamColor?: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
       method: "GET",
     }),
 

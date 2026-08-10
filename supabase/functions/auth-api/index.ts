@@ -315,10 +315,17 @@ async function handleRoute(req: Request): Promise<Response> {
           sessionTeamId = admin.team_id;
         }
         const token = await createSession("admin", admin.id, admin.full_name, permissions, sessionTeamId);
+        let teamCode: string | null = null;
+        let teamColor: string | null = null;
+        if (sessionTeamId) {
+          const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", sessionTeamId).maybeSingle();
+          teamCode = teamData?.code ?? null;
+          teamColor = teamData?.color ?? null;
+        }
         return jsonResponse({
           token, userType: "admin", fullName: admin.full_name, userId: admin.id,
           mustChangePassword: admin.must_change_password ?? false, permissions,
-          teamId: sessionTeamId, role: admin.role || "admin",
+          teamId: sessionTeamId, role: admin.role || "admin", teamCode, teamColor,
         });
       }
       return jsonError(401, "Identifiants incorrects");
@@ -335,9 +342,16 @@ async function handleRoute(req: Request): Promise<Response> {
         }
         const permissions = normalizePermissions(sup.permissions, "superviseur");
         const token = await createSession("superviseur", sup.id, sup.full_name, permissions, sup.team_id);
+        let teamCode: string | null = null;
+        let teamColor: string | null = null;
+        if (sup.team_id) {
+          const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", sup.team_id).maybeSingle();
+          teamCode = teamData?.code ?? null;
+          teamColor = teamData?.color ?? null;
+        }
         return jsonResponse({
           token, userType: "superviseur", fullName: sup.full_name, userId: sup.id,
-          permissions, teamId: sup.team_id, role: "superviseur",
+          permissions, teamId: sup.team_id, role: "superviseur", teamCode, teamColor,
         });
       }
       return jsonError(401, "Identifiants incorrects");
@@ -354,9 +368,16 @@ async function handleRoute(req: Request): Promise<Response> {
         }
         const permissions = normalizePermissions(commercial.permissions, "commercial");
         const token = await createSession("commercial", commercial.id, commercial.full_name, permissions, commercial.team_id);
+        let teamCode: string | null = null;
+        let teamColor: string | null = null;
+        if (commercial.team_id) {
+          const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", commercial.team_id).maybeSingle();
+          teamCode = teamData?.code ?? null;
+          teamColor = teamData?.color ?? null;
+        }
         return jsonResponse({
           token, userType: "commercial", fullName: commercial.full_name, userId: commercial.id,
-          permissions, teamId: commercial.team_id, role: "commercial",
+          permissions, teamId: commercial.team_id, role: "commercial", teamCode, teamColor,
         });
       }
       return jsonError(401, "Identifiants incorrects");
@@ -375,16 +396,22 @@ async function handleRoute(req: Request): Promise<Response> {
     if (!token) return jsonError(401, "Non authentifié");
     const session = await getSession(token);
     if (!session) return jsonError(401, "Session expirée");
-    // For admin, fetch role from admins table
     let role = session.user_type;
+    let teamCode: string | null = null;
+    let teamColor: string | null = null;
     if (session.user_type === "admin") {
       const { data: adminData } = await supabase.from("admins").select("role, team_id").eq("id", session.user_id).maybeSingle();
       role = adminData?.role || "admin";
     }
+    if (session.team_id) {
+      const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", session.team_id).maybeSingle();
+      teamCode = teamData?.code ?? null;
+      teamColor = teamData?.color ?? null;
+    }
     return jsonResponse({
       userType: session.user_type, userId: session.user_id,
       fullName: session.full_name, permissions: session.permissions,
-      teamId: session.team_id, role,
+      teamId: session.team_id, role, teamCode, teamColor,
     });
   }
 

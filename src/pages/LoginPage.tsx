@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 const TEAM_CONFIG: Record<string, { name: string; color: string; icon: typeof Milk }> = {
   yaourt: { name: "Yaourt Team", color: "#1D6FB8", icon: Milk },
   eau: { name: "Eau Team", color: "#f30714", icon: Droplets },
+  superadmin: { name: "Accès Super Administrateur", color: "#1f2937", icon: Shield },
 };
 
 export function LoginPage() {
@@ -14,7 +15,7 @@ export function LoginPage() {
   const { team } = useParams<{ team: string }>();
   const teamKey = team?.toLowerCase() || "yaourt";
   const teamConfig = TEAM_CONFIG[teamKey] || TEAM_CONFIG.yaourt;
-  const teamCode = teamKey === "yaourt" ? "YAOURT" : "EAU";
+  const teamCode = teamKey === "yaourt" ? "YAOURT" : teamKey === "eau" ? "EAU" : undefined;
 
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");
@@ -27,7 +28,7 @@ export function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const data = await login({ login: loginId, password, teamCode });
+      const data = await login({ login: loginId, password, ...(teamCode ? { teamCode } : {}) });
       navigate(data.userType === "admin" ? "/admin" : "/commercial");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur de connexion");

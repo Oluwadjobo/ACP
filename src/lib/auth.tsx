@@ -8,6 +8,8 @@ interface AuthState {
   fullName: string | null;
   userId: string | null;
   teamId: string | null;
+  teamCode: string | null;
+  teamColor: string | null;
   role: AdminRole | UserType | null;
   permissions: Permissions | null;
   mustChangePassword: boolean;
@@ -27,6 +29,8 @@ interface LoginResult {
   userType: string;
   mustChangePassword?: boolean;
   teamId: string | null;
+  teamCode: string | null;
+  teamColor: string | null;
   role: string;
 }
 
@@ -39,6 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fullName: null,
     userId: null,
     teamId: null,
+    teamCode: null,
+    teamColor: null,
     role: null,
     permissions: null,
     mustChangePassword: false,
@@ -60,6 +66,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           fullName: data.fullName,
           userId: data.userId,
           teamId: data.teamId ?? null,
+          teamCode: (data as { teamCode?: string }).teamCode ?? null,
+          teamColor: (data as { teamColor?: string }).teamColor ?? null,
           role: data.role as AdminRole | UserType,
           permissions: data.permissions as Permissions,
           mustChangePassword: false,
@@ -68,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         localStorage.removeItem("session_token");
-        setState({ token: null, userType: null, fullName: null, userId: null, teamId: null, role: null, permissions: null, mustChangePassword: false, loading: false });
+        setState({ token: null, userType: null, fullName: null, userId: null, teamId: null, teamCode: null, teamColor: null, role: null, permissions: null, mustChangePassword: false, loading: false });
       });
   }, []);
 
@@ -81,12 +89,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       fullName: data.fullName,
       userId: data.userId,
       teamId: data.teamId ?? null,
+      teamCode: (data as { teamCode?: string }).teamCode ?? null,
+      teamColor: (data as { teamColor?: string }).teamColor ?? null,
       role: data.role as AdminRole | UserType,
       permissions: data.permissions as Permissions,
       mustChangePassword: data.mustChangePassword ?? false,
       loading: false,
     });
-    return { userType: data.userType, mustChangePassword: data.mustChangePassword, teamId: data.teamId ?? null, role: data.role };
+    return { userType: data.userType, mustChangePassword: data.mustChangePassword, teamId: data.teamId ?? null, teamCode: (data as { teamCode?: string }).teamCode ?? null, teamColor: (data as { teamColor?: string }).teamColor ?? null, role: data.role };
   };
 
   const logout = async () => {
@@ -96,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore
     }
     localStorage.removeItem("session_token");
-    setState({ token: null, userType: null, fullName: null, userId: null, teamId: null, role: null, permissions: null, mustChangePassword: false, loading: false });
+    setState({ token: null, userType: null, fullName: null, userId: null, teamId: null, teamCode: null, teamColor: null, role: null, permissions: null, mustChangePassword: false, loading: false });
   };
 
   const clearMustChangePassword = () => {
@@ -106,7 +116,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const switchTeam = async (teamId: string | null) => {
     try {
       await api.switchTeam(teamId);
-      setState((s) => ({ ...s, teamId }));
+      // Re-fetch /me to get updated teamCode/teamColor
+      const me = await api.me();
+      setState((s) => ({ ...s, teamId: me.teamId ?? null, teamCode: (me as { teamCode?: string }).teamCode ?? null, teamColor: (me as { teamColor?: string }).teamColor ?? null }));
     } catch {
       // ignore — team switch failed
     }
@@ -114,25 +126,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isSuperAdmin = state.userType === "admin" && state.role === "super_admin";
 
-  // Dynamic theming: set data-team attribute on <html> for CSS variable theming
+  // Dynamic theming: set data-team attribute on <html> based on team code
   useEffect(() => {
-    const applyTheme = (teamCode: string | null) => {
-      if (teamCode === "EAU") {
-        document.documentElement.setAttribute("data-team", "EAU");
-      } else {
-        document.documentElement.removeAttribute("data-team");
-      }
-    };
-
-    if (state.teamId) {
-      api.listTeams().then((teams) => {
-        const team = teams.find((t) => t.id === state.teamId);
-        applyTheme(team?.code || null);
-      }).catch(() => applyTheme(null));
+    if (state.teamCode === "EAU") {
+      document.documentElement.setAttribute("data-team", "EAU");
     } else {
-      applyTheme(null);
+      document.documentElement.removeAttribute("data-team");
     }
-  }, [state.teamId]);
+  }, [state.teamCode]);
 
   const hasPermission = (p: string): boolean => {
     if (state.userType === "admin") return true;
