@@ -90,13 +90,13 @@ export const api = {
     method: "GET",
   }),
 
-  createCommercial: (body: { identifiant: string; full_name: string; password: string; telephone?: string; superviseur_id?: string }) =>
+  createCommercial: (body: { identifiant: string; full_name: string; password: string; telephone?: string; superviseur_id?: string; secteur_ids: string[] }) =>
     apiRequest<import("@/types").Commercial>("/commerciaux", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateCommercial: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; superviseur_id: string | null }>) =>
+  updateCommercial: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; superviseur_id: string | null; secteur_ids: string[] }>) =>
     apiRequest<import("@/types").Commercial>(`/commerciaux/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users, Shield } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Commercial, Superviseur } from "@/types";
+import type { Commercial, Secteur, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { PermissionsEditor } from "@/components/PermissionsEditor";
 import { formatDate } from "@/lib/format";
@@ -99,7 +99,7 @@ export function AdminCommerciaux() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-semibold text-gray-900 text-sm">{c.full_name}</p>
                     {c.superviseur_nom && <span className="badge bg-blue-50 text-blue-600">{c.superviseur_nom}</span>}
-                    {c.secteur_nom && <span className="badge bg-primary-50 text-primary-600">{c.secteur_nom}</span>}
+                    {c.tournees?.map((t) => <span key={t.secteur_id} className="badge bg-primary-50 text-primary-600">{t.nom}</span>)}
                     <span className={`badge ${c.active ? "bg-accent-50 text-accent-700" : "bg-gray-100 text-gray-500"}`}>
                       {c.active ? (
                         <><UserCheck size={12} /> Actif</>
@@ -220,18 +220,24 @@ function CommercialModal({
   const [password, setPassword] = useState("");
   const [telephone, setTelephone] = useState("");
   const [superviseurId, setSuperviseurId] = useState("");
+  const [secteurIds, setSecteurIds] = useState<string[]>([]);
   const [superviseurs, setSuperviseurs] = useState<Superviseur[]>([]);
+  const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
-      api.listSuperviseurs().then(setSuperviseurs).catch(() => {});
+      Promise.all([api.listSuperviseurs(), api.listSecteurs()]).then(([supRows, secteurRows]) => {
+        setSuperviseurs(supRows);
+        setSecteurs(secteurRows);
+      }).catch(() => {});
       setIdentifiant(editing?.identifiant || "");
       setFullName(editing?.full_name || "");
       setPassword("");
       setTelephone(editing?.telephone || "");
       setSuperviseurId(editing?.superviseur_id || "");
+      setSecteurIds(editing?.tournees?.map((t) => t.secteur_id) || []);
       setActive(editing?.active ?? true);
     }
   }, [open, editing]);
@@ -245,6 +251,11 @@ function CommercialModal({
         setSaving(false);
         return;
       }
+      if (secteurIds.length === 0) {
+        showToast("error", "Au moins une tournée est obligatoire");
+        setSaving(false);
+        return;
+      }
       if (editing) {
         await api.updateCommercial(editing.id, {
           identifiant: identifiant.trim(),
@@ -252,6 +263,7 @@ function CommercialModal({
           active,
           telephone: telephone.trim(),
           superviseur_id: superviseurId,
+          secteur_ids: secteurIds,
         });
         showToast("success", "Commercial modifié");
       } else {
@@ -266,6 +278,7 @@ function CommercialModal({
           password,
           telephone: telephone.trim(),
           superviseur_id: superviseurId,
+          secteur_ids: secteurIds,
         });
         showToast("success", "Commercial créé");
       }
@@ -291,6 +304,19 @@ function CommercialModal({
         <div>
           <label className="label">Téléphone</label>
           <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+229 ..." />
+        </div>
+        <div>
+          <label className="label">Tournées affectées *</label>
+          <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin rounded-xl border border-gray-200 p-3">
+            {secteurs.filter((s) => s.actif).map((s) => (
+              <label key={s.id} className="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked={secteurIds.includes(s.id)} onChange={(e) => setSecteurIds(e.target.checked ? [...secteurIds, s.id] : secteurIds.filter((id) => id !== s.id))} className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: s.color_code || "#6B7280" }} />
+                <span className="text-sm text-gray-700">{s.nom} ({s.code})</span>
+              </label>
+            ))}
+          </div>
+          {secteurs.length === 0 && <p className="text-xs text-error-500 mt-1">Aucune tournée active. Créez d'abord une tournée.</p>}
         </div>
         <div>
           <label className="label">Team Leader de rattachement *</label>
