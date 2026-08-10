@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import type { UserType, AdminRole, Permissions } from "@/types";
 
@@ -126,8 +126,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isSuperAdmin = state.userType === "admin" && state.role === "super_admin";
 
-  // Dynamic theming: set data-team attribute on <html> based on team code
-  useEffect(() => {
+  // Dynamic theming: set data-team attribute on <html> based on team code.
+  // useLayoutEffect runs before the browser paints, preventing a color flash
+  // where the dashboard briefly appears in the default (blue) theme.
+  useLayoutEffect(() => {
     if (state.teamCode === "EAU") {
       document.documentElement.setAttribute("data-team", "EAU");
     } else {
@@ -135,16 +137,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [state.teamCode]);
 
-  const hasPermission = (p: string): boolean => {
-    // The super administrator holds every capability; everyone else, administrators
-    // included, is limited to the permissions stored on their account (which the
-    // server enforces independently).
+  const hasPermission = useCallback((p: string): boolean => {
     if (state.userType === "admin" && state.role === "super_admin") return true;
     return state.permissions?.[p as keyof Permissions] === true;
-  };
+  }, [state.userType, state.role, state.permissions]);
+
+  const contextValue = useMemo(() => ({ ...state, login, logout, clearMustChangePassword, switchTeam, hasPermission, isSuperAdmin }), [state, login, logout, clearMustChangePassword, switchTeam, hasPermission, isSuperAdmin]);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout, clearMustChangePassword, switchTeam, hasPermission, isSuperAdmin }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

@@ -109,7 +109,7 @@ export function AdminDashboard() {
   ];
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
         <p className="text-gray-500 text-sm mt-1">Vue d'ensemble de l'activité terrain en temps réel</p>
