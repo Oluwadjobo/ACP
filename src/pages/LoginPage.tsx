@@ -29,7 +29,13 @@ export function LoginPage() {
     setLoading(true);
     try {
       const data = await login({ login: loginId, password, ...(teamCode ? { teamCode } : {}) });
-      navigate(data.userType === "admin" ? "/admin" : "/commercial");
+      if (data.userType === "admin") {
+        navigate("/admin");
+      } else if (data.userType === "superviseur") {
+        navigate("/superviseur");
+      } else {
+        navigate("/commercial");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur de connexion");
     } finally {
