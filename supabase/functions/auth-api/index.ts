@@ -38,6 +38,11 @@ const VENTE_NON_REALISEE_MOTIFS = [
   "Autre",
 ];
 
+const MIN_PASSWORD_LENGTH = 8;
+const PASSWORD_RULE_MESSAGE = `Le mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères`;
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MINUTES = 15;
+
 const CONTROLE_NOTATIONS = ["excellent", "bon", "moyen", "faible", "critique"];
 const BL_STATUTS = ["en_attente", "livre", "partiel", "annule"];
 
@@ -150,19 +155,103 @@ async function sha512(text: string): Promise<string> {
     .join("");
 }
 
-async function hashPassword(password: string, salt?: string): Promise<string> {
-  const s = salt || crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-  const h = await sha512(s + password);
-  return `sha512:${s}:${h}`;
+const PBKDF2_ITERATIONS = 150000;
+
+function toHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function verifyPassword(password: string, stored: string): Promise<boolean> {
+function constantTimeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function pbkdf2Hash(password: string, salt: string, iterations: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations, hash: "SHA-512" },
+    key, 512
+  );
+  return toHex(bits);
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.randomUUID().replace(/-/g, "");
+  const h = await pbkdf2Hash(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2:${PBKDF2_ITERATIONS}:${salt}:${h}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<{ ok: boolean; legacy: boolean }> {
+  if (!stored || typeof stored !== "string") return { ok: false, legacy: false };
   const parts = stored.split(":");
-  if (parts.length !== 3) return false;
-  const [algo, salt, hash] = parts;
-  if (algo !== "sha512") return false;
-  const computed = await sha512(salt + password);
-  return computed === hash;
+  if (parts[0] === "pbkdf2" && parts.length === 4) {
+    const iterations = parseInt(parts[1], 10);
+    if (!Number.isFinite(iterations) || iterations <= 0) return { ok: false, legacy: false };
+    const computed = await pbkdf2Hash(password, parts[2], iterations);
+    return { ok: constantTimeEquals(computed, parts[3]), legacy: false };
+  }
+  if (parts[0] === "sha512" && parts.length === 3) {
+    const computed = await sha512(parts[1] + password);
+    return { ok: constantTimeEquals(computed, parts[2]), legacy: true };
+  }
+  return { ok: false, legacy: false };
+}
+
+/** Verifies a password and transparently upgrades a legacy hash to PBKDF2. */
+async function checkPassword(password: string, stored: string, table: string, id: string): Promise<boolean> {
+  const result = await verifyPassword(password, stored);
+  if (result.ok && result.legacy) {
+    try {
+      const upgraded = await hashPassword(password);
+      await supabase.from(table).update({ password_hash: upgraded }).eq("id", id);
+    } catch (_e) { /* upgrade is best effort; never block a valid sign-in */ }
+  }
+  return result.ok;
+}
+
+// ============ LOGIN RATE LIMITING ============
+
+function getClientIp(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0].trim().slice(0, 64);
+  return req.headers.get("cf-connecting-ip")?.slice(0, 64) || "unknown";
+}
+
+async function isLoginLocked(identifier: string, ip: string): Promise<boolean> {
+  const { data } = await supabase.from("login_attempts")
+    .select("locked_until").eq("identifier", identifier).eq("ip", ip).maybeSingle();
+  if (!data?.locked_until) return false;
+  return new Date(data.locked_until).getTime() > Date.now();
+}
+
+async function recordLoginFailure(identifier: string, ip: string): Promise<void> {
+  const now = Date.now();
+  const windowMs = LOGIN_WINDOW_MINUTES * 60 * 1000;
+  const { data } = await supabase.from("login_attempts")
+    .select("id, attempts, first_attempt").eq("identifier", identifier).eq("ip", ip).maybeSingle();
+  if (!data) {
+    await supabase.from("login_attempts").insert({
+      identifier, ip, attempts: 1, first_attempt: new Date(now).toISOString(),
+    });
+    return;
+  }
+  const withinWindow = new Date(data.first_attempt).getTime() > now - windowMs;
+  const attempts = withinWindow ? Number(data.attempts) + 1 : 1;
+  const updates: Record<string, unknown> = {
+    attempts,
+    updated_at: new Date(now).toISOString(),
+    locked_until: attempts >= LOGIN_MAX_ATTEMPTS ? new Date(now + windowMs).toISOString() : null,
+  };
+  if (!withinWindow) updates.first_attempt = new Date(now).toISOString();
+  await supabase.from("login_attempts").update(updates).eq("id", data.id);
+}
+
+async function clearLoginFailures(identifier: string, ip: string): Promise<void> {
+  await supabase.from("login_attempts").delete().eq("identifier", identifier).eq("ip", ip);
 }
 
 function generateToken(): string {
@@ -289,6 +378,15 @@ async function handleRoute(req: Request): Promise<Response> {
     const { login, password, team_code } = await req.json();
     if (!login || !password) return jsonError(400, "Identifiant et mot de passe requis");
     const normalizedLogin = login.trim();
+    const clientIp = getClientIp(req);
+    const rateKey = normalizedLogin.toLowerCase();
+    if (await isLoginLocked(rateKey, clientIp)) {
+      return jsonError(429, `Trop de tentatives de connexion. Réessayez dans ${LOGIN_WINDOW_MINUTES} minutes.`);
+    }
+    const failLogin = async () => {
+      await recordLoginFailure(rateKey, clientIp);
+      return jsonError(401, "Identifiants incorrects");
+    };
 
     // Resolve team if team_code is provided
     let requestedTeamId: string | null = null;
@@ -301,7 +399,8 @@ async function handleRoute(req: Request): Promise<Response> {
     // Try admin
     const { data: admin } = await supabase.from("admins").select("*").eq("email", normalizedLogin.toLowerCase()).maybeSingle();
     if (admin) {
-      if (await verifyPassword(password, admin.password_hash)) {
+      if (await checkPassword(password, admin.password_hash, "admins", admin.id)) {
+        await clearLoginFailures(rateKey, clientIp);
         const permissions = normalizePermissions(admin.permissions, "admin");
         // Super admin: team_id from request (or null for global). Regular admin: must match their team.
         let sessionTeamId: string | null;
@@ -328,14 +427,16 @@ async function handleRoute(req: Request): Promise<Response> {
           teamId: sessionTeamId, role: admin.role || "admin", teamCode, teamColor,
         });
       }
-      return jsonError(401, "Identifiants incorrects");
+      return await failLogin();
     }
 
     // Try superviseur
     const { data: sup } = await supabase.from("superviseurs").select("*").eq("identifiant", normalizedLogin).maybeSingle();
     if (sup) {
-      if (!sup.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
-      if (await verifyPassword(password, sup.password_hash)) {
+      if (await checkPassword(password, sup.password_hash, "superviseurs", sup.id)) {
+        // Account state is only revealed once the password is proven correct.
+        if (!sup.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
+        await clearLoginFailures(rateKey, clientIp);
         // Verify team membership
         if (requestedTeamId && sup.team_id && requestedTeamId !== sup.team_id) {
           return jsonError(403, "Vous n'êtes pas autorisé à accéder à cet espace.");
@@ -354,14 +455,16 @@ async function handleRoute(req: Request): Promise<Response> {
           permissions, teamId: sup.team_id, role: "superviseur", teamCode, teamColor,
         });
       }
-      return jsonError(401, "Identifiants incorrects");
+      return await failLogin();
     }
 
     // Try commercial
     const { data: commercial } = await supabase.from("commerciaux").select("*").eq("identifiant", normalizedLogin).maybeSingle();
     if (commercial) {
-      if (!commercial.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
-      if (await verifyPassword(password, commercial.password_hash)) {
+      if (await checkPassword(password, commercial.password_hash, "commerciaux", commercial.id)) {
+        // Account state is only revealed once the password is proven correct.
+        if (!commercial.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
+        await clearLoginFailures(rateKey, clientIp);
         // Verify team membership
         if (requestedTeamId && commercial.team_id && requestedTeamId !== commercial.team_id) {
           return jsonError(403, "Vous n'êtes pas autorisé à accéder à cet espace.");
@@ -380,9 +483,9 @@ async function handleRoute(req: Request): Promise<Response> {
           permissions, teamId: commercial.team_id, role: "commercial", teamCode, teamColor,
         });
       }
-      return jsonError(401, "Identifiants incorrects");
+      return await failLogin();
     }
-    return jsonError(401, "Identifiants incorrects");
+    return await failLogin();
   }
 
   if (path === "/logout" && method === "POST") {
@@ -447,7 +550,6 @@ async function handleRoute(req: Request): Promise<Response> {
   const perms = (session.permissions as Record<string, boolean>) || {};
   const teamId = session.team_id;
   function hasPermission(p: string): boolean {
-    if (session.user_type === "admin") return true;
     return perms[p] === true;
   }
   function requirePermission(p: string): Response | null {
@@ -458,25 +560,46 @@ async function handleRoute(req: Request): Promise<Response> {
   // ===== ADMIN ROUTES =====
   if (session.user_type === "admin") {
     // Fetch admin role to determine if super_admin
-    const { data: adminRecord } = await supabase.from("admins").select("role, team_id").eq("id", session.user_id).maybeSingle();
-    const adminRole = adminRecord?.role || "admin";
-    const adminTeamId = adminRecord?.team_id || null;
+    const { data: adminRecord } = await supabase.from("admins").select("role, team_id, must_change_password").eq("id", session.user_id).maybeSingle();
+    if (!adminRecord) return jsonError(401, "Session expirée");
+    const adminRole = adminRecord.role || "admin";
+    const adminTeamId = adminRecord.team_id || null;
+
+    // A pending password change is enforced server-side, not only by the UI.
+    if (adminRecord.must_change_password && path !== "/change-password") {
+      return jsonError(403, "Vous devez changer votre mot de passe avant de continuer");
+    }
+
+    // A non-super administrator without a team would otherwise bypass every team filter.
+    if (adminRole !== "super_admin" && !adminTeamId) {
+      return jsonError(403, "Votre compte n'est rattaché à aucune équipe. Contactez le super administrateur.");
+    }
+
     // Effective team: super_admin uses session.team_id (can be null for global), regular admin uses their fixed team_id
     const effectiveTeamId = adminRole === "super_admin" ? teamId : adminTeamId;
 
-    // Helper: apply team filter to a query builder
-    function teamFilter<T>(query: T): T {
-      if (effectiveTeamId) {
-        // @ts-expect-error: supabase query builder chain
-        return query.eq("team_id", effectiveTeamId);
+    // Permissions stored on the administrator record are authoritative for every
+    // administrator except the super administrator.
+    function requireAnyAdminPermission(...ps: string[]): Response | null {
+      if (adminRole === "super_admin") return null;
+      if (ps.some((p) => perms[p] === true)) return null;
+      return jsonError(403, "Vous n'avez pas l'autorisation d'effectuer cette action");
+    }
+
+    // Only a super administrator may act on another super administrator's account.
+    async function guardSuperAdminTarget(targetId: string): Promise<Response | null> {
+      if (adminRole === "super_admin") return null;
+      const { data } = await supabase.from("admins").select("role").eq("id", targetId).maybeSingle();
+      if (data?.role === "super_admin") {
+        return jsonError(403, "Vous n'avez pas l'autorisation d'effectuer cette action");
       }
-      return query;
+      return null;
     }
 
     // --- CHANGE PASSWORD ---
     if (path === "/change-password" && method === "POST") {
       const { newPassword } = await req.json();
-      if (!newPassword || newPassword.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       const password_hash = await hashPassword(newPassword);
       const { error } = await supabase.from("admins").update({ password_hash, must_change_password: false }).eq("id", session.user_id);
       if (error) return jsonError(500, "Erreur lors du changement de mot de passe");
@@ -485,6 +608,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- SECTEURS CRUD ---
     if (path === "/secteurs" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_secteurs", "manage_commerciaux", "manage_superviseurs", "manage_points_vente", "view_carte", "view_dashboard", "view_visites"); if (denied) return denied; }
       let query = supabase.from("secteurs").select("*").order("created_at", { ascending: false });
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query;
@@ -492,6 +616,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path === "/secteurs" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_secteurs"); if (denied) return denied; }
       const { nom, code, description, color_code } = await req.json();
       if (!nom || !code) return jsonError(400, "Nom et code requis");
       const insertData: Record<string, unknown> = {
@@ -516,6 +641,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/secteurs/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_secteurs"); if (denied) return denied; }
       const id = path.split("/")[2];
       const body = await req.json();
       const updates: Record<string, unknown> = {};
@@ -532,6 +658,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path.startsWith("/secteurs/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_secteurs"); if (denied) return denied; }
       const id = path.split("/")[2];
       let query = supabase.from("secteurs").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -542,6 +669,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- COMMERCIAUX CRUD ---
     if (path === "/commerciaux" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_commerciaux", "view_visites", "view_ventes", "view_dashboard", "view_carte", "view_controles", "manage_bons_livraison"); if (denied) return denied; }
       let query = supabase
         .from("commerciaux").select("id, identifiant, full_name, active, telephone, superviseur_id, team_id, created_at, updated_at, permissions")
         .order("created_at", { ascending: false });
@@ -563,9 +691,10 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(enriched);
     }
     if (path === "/commerciaux" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_commerciaux"); if (denied) return denied; }
       const { identifiant, full_name, password, telephone, superviseur_id } = await req.json();
       if (!identifiant || !full_name || !password) return jsonError(400, "Identifiant, nom et mot de passe requis");
-      if (password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       if (!superviseur_id) return jsonError(400, "Un superviseur de rattachement est obligatoire");
       const password_hash = await hashPassword(password);
       const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
@@ -577,6 +706,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/commerciaux/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_commerciaux"); if (denied) return denied; }
       const id = path.split("/")[2];
       const body = await req.json();
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -593,9 +723,10 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path.startsWith("/commerciaux/") && path.endsWith("/reset-password") && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_commerciaux"); if (denied) return denied; }
       const id = path.split("/")[2];
       const { password } = await req.json();
-      if (!password || password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       const password_hash = await hashPassword(password);
       let query = supabase.from("commerciaux").update({ password_hash, updated_at: new Date().toISOString() }).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -604,6 +735,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({ success: true });
     }
     if (path.startsWith("/commerciaux/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_commerciaux"); if (denied) return denied; }
       const id = path.split("/")[2];
       let query = supabase.from("commerciaux").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -614,6 +746,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- SUPERVISEURS CRUD ---
     if (path === "/superviseurs" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_superviseurs", "view_controles", "view_dashboard", "view_visites"); if (denied) return denied; }
       let query = supabase
         .from("superviseurs").select("id, identifiant, full_name, active, telephone, team_id, created_at, updated_at, permissions")
         .order("created_at", { ascending: false });
@@ -634,9 +767,10 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(enriched);
     }
     if (path === "/superviseurs" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_superviseurs"); if (denied) return denied; }
       const { identifiant, full_name, password, telephone, secteur_ids } = await req.json();
       if (!identifiant || !full_name || !password) return jsonError(400, "Identifiant, nom et mot de passe requis");
-      if (password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       if (!Array.isArray(secteur_ids) || secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       const password_hash = await hashPassword(password);
       const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
@@ -650,6 +784,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/superviseurs/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_superviseurs"); if (denied) return denied; }
       const id = path.split("/")[2];
       const body = await req.json();
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -658,7 +793,14 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.active !== undefined) updates.active = body.active;
       if (body.telephone !== undefined) updates.telephone = body.telephone?.trim() || null;
       if (body.secteur_ids !== undefined && Array.isArray(body.secteur_ids)) {
-        await supabase.from("team_leader_tournees").delete().eq("superviseur_id", id);
+        // Confirm the supervisor belongs to the caller's team BEFORE any destructive write.
+        let ownerCheck = supabase.from("superviseurs").select("id").eq("id", id);
+        if (effectiveTeamId) ownerCheck = ownerCheck.eq("team_id", effectiveTeamId);
+        const { data: owned } = await ownerCheck.maybeSingle();
+        if (!owned) return jsonError(404, "Team Leader introuvable");
+        let tltDelete = supabase.from("team_leader_tournees").delete().eq("superviseur_id", id);
+        if (effectiveTeamId) tltDelete = tltDelete.eq("team_id", effectiveTeamId);
+        await tltDelete;
         if (body.secteur_ids.length > 0) {
           const tltData = body.secteur_ids.map((sid: string) => ({ superviseur_id: id, secteur_id: sid, ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}) }));
           await supabase.from("team_leader_tournees").insert(tltData);
@@ -675,9 +817,10 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path.startsWith("/superviseurs/") && path.endsWith("/reset-password") && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_superviseurs"); if (denied) return denied; }
       const id = path.split("/")[2];
       const { password } = await req.json();
-      if (!password || password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       const password_hash = await hashPassword(password);
       let query = supabase.from("superviseurs").update({ password_hash, updated_at: new Date().toISOString() }).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -686,6 +829,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({ success: true });
     }
     if (path.startsWith("/superviseurs/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_superviseurs"); if (denied) return denied; }
       const id = path.split("/")[2];
       let query = supabase.from("superviseurs").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -696,6 +840,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ADMINS CRUD ---
     if (path === "/admins" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       // Super admin sees all; regular admin sees only their team
       let query = supabase.from("admins").select("id, email, full_name, role, team_id, must_change_password, created_at, permissions").order("created_at", { ascending: false });
       if (adminRole !== "super_admin" && adminTeamId) query = query.eq("team_id", adminTeamId);
@@ -704,9 +849,13 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path === "/admins" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const { email, full_name, password, role, team_id } = await req.json();
       if (!email || !full_name || !password) return jsonError(400, "Email, nom et mot de passe requis");
-      if (password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
+      if (adminRole === "super_admin" && role !== "super_admin" && !team_id) {
+        return jsonError(400, "Une équipe doit être choisie pour un administrateur d'équipe");
+      }
       const password_hash = await hashPassword(password);
       const insertData: Record<string, unknown> = {
         email: email.trim().toLowerCase(), full_name: full_name.trim(),
@@ -725,13 +874,18 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/admins/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const id = path.split("/")[2];
       const body = await req.json();
       const updates: Record<string, unknown> = {};
       if (body.full_name !== undefined) updates.full_name = body.full_name.trim();
       if (body.email !== undefined) updates.email = body.email.trim().toLowerCase();
-      if (body.role !== undefined && adminRole === "super_admin") updates.role = body.role;
+      if (body.role !== undefined && adminRole === "super_admin") {
+        updates.role = body.role === "super_admin" ? "super_admin" : "admin";
+      }
       if (body.team_id !== undefined && adminRole === "super_admin") updates.team_id = body.team_id || null;
+      const superGuard = await guardSuperAdminTarget(id);
+      if (superGuard) return superGuard;
       let query = supabase.from("admins").update(updates).eq("id", id);
       if (adminRole !== "super_admin" && adminTeamId) query = query.eq("team_id", adminTeamId);
       const { data, error } = await query.select("id, email, full_name, role, team_id, must_change_password, created_at").maybeSingle();
@@ -740,9 +894,12 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path.startsWith("/admins/") && path.endsWith("/reset-password") && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const id = path.split("/")[2];
       const { password } = await req.json();
-      if (!password || password.length < 6) return jsonError(400, "Le mot de passe doit contenir au moins 6 caractères");
+      if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
+      const superGuard = await guardSuperAdminTarget(id);
+      if (superGuard) return superGuard;
       const password_hash = await hashPassword(password);
       let query = supabase.from("admins").update({ password_hash, must_change_password: true }).eq("id", id);
       if (adminRole !== "super_admin" && adminTeamId) query = query.eq("team_id", adminTeamId);
@@ -751,8 +908,11 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({ success: true });
     }
     if (path.startsWith("/admins/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const id = path.split("/")[2];
       if (id === session.user_id) return jsonError(400, "Vous ne pouvez pas supprimer votre propre compte");
+      const superGuard = await guardSuperAdminTarget(id);
+      if (superGuard) return superGuard;
       let query = supabase.from("admins").delete().eq("id", id);
       if (adminRole !== "super_admin" && adminTeamId) query = query.eq("team_id", adminTeamId);
       const { error } = await query;
@@ -762,6 +922,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- PRODUITS CRUD ---
     if (path === "/produits" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_produits", "view_ventes", "manage_bons_livraison", "view_visites"); if (denied) return denied; }
       let query = supabase.from("produits").select("id, nom, created_at").order("nom", { ascending: true });
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query;
@@ -769,6 +930,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path === "/produits" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_produits"); if (denied) return denied; }
       const { nom } = await req.json();
       if (!nom) return jsonError(400, "Nom du produit requis");
       const insertData: Record<string, unknown> = { nom: nom.trim() };
@@ -778,6 +940,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/produits/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_produits"); if (denied) return denied; }
       const id = path.split("/")[2];
       let query = supabase.from("produits").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -788,6 +951,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- POINTS DE VENTE CRUD ---
     if (path === "/points-vente" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
       let query = supabase.from("points_vente").select("*").order("created_at", { ascending: false });
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query;
@@ -805,6 +969,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(enriched);
     }
     if (path === "/points-vente" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const { name, address, city, latitude, longitude, secteur_id } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
@@ -817,6 +982,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data, 201);
     }
     if (path.startsWith("/points-vente/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const id = path.split("/")[2];
       const body = await req.json();
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -834,6 +1000,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
     if (path.startsWith("/points-vente/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const id = path.split("/")[2];
       let query = supabase.from("points_vente").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
@@ -844,6 +1011,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- DASHBOARD STATS ---
     if (path === "/dashboard" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_dashboard"); if (denied) return denied; }
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       const todayIso = todayStart.toISOString();
 
@@ -892,6 +1060,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ALL VISITES (admin) ---
     if (path === "/visites" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_visites"); if (denied) return denied; }
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
@@ -907,6 +1076,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ALL PROMESSES (admin) ---
     if (path === "/promesses" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_visites"); if (denied) return denied; }
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
@@ -922,6 +1092,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ALL VENTES (admin) ---
     if (path === "/ventes" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_ventes"); if (denied) return denied; }
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
@@ -938,6 +1109,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ALL BONS LIVRAISON (admin) ---
     if (path === "/bons-livraison" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_bons_livraison"); if (denied) return denied; }
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
@@ -952,6 +1124,7 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse({ data, count: count || 0, page, pageSize });
     }
     if (path.startsWith("/bons-livraison/") && path.endsWith("/statut") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_bons_livraison"); if (denied) return denied; }
       const id = path.split("/")[2];
       const { statut, commentaire } = await req.json();
       if (!BL_STATUTS.includes(statut)) return jsonError(400, "Statut invalide");
@@ -967,22 +1140,33 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- PERMISSIONS MANAGEMENT ---
     if (path === "/permissions" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const userType = url.searchParams.get("type") as UserType | null;
       const userId = url.searchParams.get("id");
       if (!userType || !userId) return jsonError(400, "Type et id requis");
       const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      if (userType === "admin" && adminRole !== "super_admin") {
+        return jsonError(403, "Seul le super administrateur peut gérer les permissions des administrateurs");
+      }
       let query = supabase.from(table).select("permissions").eq("id", userId);
-      if (effectiveTeamId && userType !== "admin") query = query.eq("team_id", effectiveTeamId);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data } = await query.maybeSingle();
       return jsonResponse({ permissions: normalizePermissions(data?.permissions, userType) });
     }
     if (path === "/permissions" && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const { userType, userId, permissions } = await req.json();
       if (!userType || !userId) return jsonError(400, "Type et id requis");
       const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      if (userType === "admin" && adminRole !== "super_admin") {
+        return jsonError(403, "Seul le super administrateur peut gérer les permissions des administrateurs");
+      }
+      if (userType === "admin" && userId === session.user_id) {
+        return jsonError(400, "Vous ne pouvez pas modifier vos propres permissions");
+      }
       const normalized = normalizePermissions(permissions, userType as UserType);
       let query = supabase.from(table).update({ permissions: normalized }).eq("id", userId);
-      if (effectiveTeamId && userType !== "admin") query = query.eq("team_id", effectiveTeamId);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { error } = await query;
       if (error) return jsonError(500, "Erreur lors de la mise à jour des permissions");
       return jsonResponse({ success: true, permissions: normalized });
@@ -993,6 +1177,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- ALL CONTROLES TERRAIN (admin) ---
     if (path === "/controles-terrain" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_controles"); if (denied) return denied; }
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
@@ -1046,7 +1231,7 @@ async function handleRoute(req: Request): Promise<Response> {
         if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
         if (userTeamId) insertData.team_id = userTeamId;
         await supabase.from("visites").insert(insertData);
-        return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, message: "Vous êtes situé à plus de 30 mètres du point de vente. Rapprochez-vous puis réessayez.", debug: { userLat: Number(latitude), userLon: Number(longitude), pointLat: pv.latitude, pointLon: pv.longitude, pointName: pv.name } }, 200);
+        return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, message: "Vous êtes situé à plus de 30 mètres du point de vente. Rapprochez-vous puis réessayez.", debug: { userLat: Number(latitude), userLon: Number(longitude), pointName: pv.name } }, 200);
       }
 
       const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
@@ -1060,7 +1245,10 @@ async function handleRoute(req: Request): Promise<Response> {
       if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
       if (userTeamId) insertData.team_id = userTeamId;
       const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
-      if (insertError) return jsonError(500, `Erreur lors de l'enregistrement: ${insertError.message}`);
+      if (insertError) {
+        console.error("visite insert failed", insertError);
+        return jsonError(500, "Erreur lors de l'enregistrement de la visite");
+      }
       return jsonResponse({ status: "confirmed", distance, accuracy: acc, visit }, 201);
     }
 
@@ -1079,10 +1267,21 @@ async function handleRoute(req: Request): Promise<Response> {
       if (vente_status === "vente_non_realisee") updates.motif = motif.trim();
       const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
       if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: existing } = await supabase.from("visites").select("id, vente_status").match(ownerFilter).maybeSingle();
+      const { data: existing } = await supabase.from("visites").select("id, status, vente_status").match(ownerFilter).maybeSingle();
       if (!existing) return jsonError(404, "Visite introuvable");
-      const { error } = await supabase.from("visites").update(updates).eq("id", visite_id);
+      // Only a visit whose GPS check passed, and which has not already been closed,
+      // may be finalized. Re-checked in the UPDATE itself so a concurrent call cannot slip through.
+      if (existing.status !== "confirmed") {
+        return jsonError(409, "Cette visite n'a pas été validée sur le terrain et ne peut pas être finalisée.");
+      }
+      if (existing.vente_status !== "confirmed") {
+        return jsonError(409, "Cette visite a déjà été finalisée.");
+      }
+      const { data: updated, error } = await supabase.from("visites").update(updates)
+        .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed")
+        .select("id").maybeSingle();
       if (error) return jsonError(500, "Erreur lors de la finalisation");
+      if (!updated) return jsonError(409, "Cette visite a déjà été finalisée.");
       return jsonResponse({ success: true, visite_id, vente_status });
     }
 
@@ -1112,8 +1311,13 @@ async function handleRoute(req: Request): Promise<Response> {
 
       const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
       if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: visite } = await supabase.from("visites").select("id").match(ownerFilter).maybeSingle();
+      const { data: visite } = await supabase.from("visites").select("id, status").match(ownerFilter).maybeSingle();
       if (!visite) return jsonError(404, "Visite introuvable");
+      if (visite.status !== "confirmed") {
+        return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
+      }
+      const { data: venteExistante } = await supabase.from("ventes").select("id").eq("visite_id", visite_id).maybeSingle();
+      if (venteExistante) return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
 
       let secteur_id: string | null = null;
       if (userRole === "commercial") {
@@ -1132,6 +1336,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (secteur_id) venteInsert.secteur_id = secteur_id;
       if (userTeamId) venteInsert.team_id = userTeamId;
       const { data: vente, error: venteError } = await supabase.from("ventes").insert(venteInsert).select("id, created_at").maybeSingle();
+      if (venteError?.code === "23505") return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
       if (venteError || !vente) return jsonError(500, "Erreur lors de la création de la vente");
 
       const lignesData = lignes.map((l: Record<string, unknown>) => ({
@@ -1180,11 +1385,14 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("create_promesse"); if (denied) return denied;
       const { visite_id, point_vente_id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations } = await req.json();
       if (!visite_id || !point_vente_id || !produits) return jsonError(400, "Visite, point de vente et produits requis");
-      let visQuery = supabase.from("visites").select("id").eq("id", visite_id).eq("superviseur_id", userId);
+      let visQuery = supabase.from("visites").select("id, status, vente_status").eq("id", visite_id).eq("superviseur_id", userId);
       if (userTeamId) visQuery = visQuery.eq("team_id", userTeamId);
       const { data: visite } = await visQuery.maybeSingle();
       if (!visite) return jsonError(404, "Visite introuvable");
-      await supabase.from("visites").update({ vente_status: "promesse_achat" }).eq("id", visite_id);
+      if (visite.status !== "confirmed") return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
+      if (visite.vente_status !== "confirmed") return jsonError(409, "Cette visite a déjà été finalisée.");
+      await supabase.from("visites").update({ vente_status: "promesse_achat" })
+        .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed");
       const insertData: Record<string, unknown> = {
         visite_id, superviseur_id: userId, point_vente_id,
         produits: Array.isArray(produits) ? produits.join(", ") : produits.trim(),
@@ -1337,7 +1545,8 @@ Deno.serve(async (req: Request) => {
   try {
     return await handleRoute(req);
   } catch (err) {
-    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : "Erreur serveur" }), {
+    console.error("auth-api unhandled error", err);
+    return new Response(JSON.stringify({ error: "Erreur serveur" }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

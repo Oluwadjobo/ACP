@@ -136,7 +136,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state.teamCode]);
 
   const hasPermission = (p: string): boolean => {
-    if (state.userType === "admin") return true;
+    // The super administrator holds every capability; everyone else, administrators
+    // included, is limited to the permissions stored on their account (which the
+    // server enforces independently).
+    if (state.userType === "admin" && state.role === "super_admin") return true;
     return state.permissions?.[p as keyof Permissions] === true;
   };
 

@@ -288,8 +288,6 @@ export interface VisitResult {
   debug?: {
     userLat: number;
     userLon: number;
-    pointLat: number;
-    pointLon: number;
     pointName: string | null;
   };
 }

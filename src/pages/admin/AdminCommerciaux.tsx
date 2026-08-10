@@ -255,8 +255,8 @@ function CommercialModal({
         });
         showToast("success", "Commercial modifié");
       } else {
-        if (password.length < 6) {
-          showToast("error", "Mot de passe : 6 caractères minimum");
+        if (password.length < 8) {
+          showToast("error", "Mot de passe : 8 caractères minimum");
           setSaving(false);
           return;
         }
@@ -305,7 +305,7 @@ function CommercialModal({
         {!editing && (
           <div>
             <label className="label">Mot de passe</label>
-            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" />
+            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" />
           </div>
         )}
         {editing && (
@@ -350,8 +350,8 @@ function PasswordModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commercial) return;
-    if (password.length < 6) {
-      showToast("error", "Mot de passe : 6 caractères minimum");
+    if (password.length < 8) {
+      showToast("error", "Mot de passe : 8 caractères minimum");
       return;
     }
     setSaving(true);
@@ -373,7 +373,7 @@ function PasswordModal({
         </p>
         <div>
           <label className="label">Nouveau mot de passe</label>
-          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" autoFocus />
+          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" autoFocus />
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>

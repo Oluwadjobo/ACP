@@ -166,7 +166,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
         await api.updateSuperviseur(editing.id, { identifiant: identifiant.trim(), full_name: fullName.trim(), active, telephone: telephone.trim(), secteur_ids: secteurIds });
         showToast("success", "Team Leader modifié");
       } else {
-        if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); setSaving(false); return; }
+        if (password.length < 8) { showToast("error", "Mot de passe : 8 caractères minimum"); setSaving(false); return; }
         if (secteurIds.length === 0) { showToast("error", "Au moins une tournée est obligatoire"); setSaving(false); return; }
         await api.createSuperviseur({ identifiant: identifiant.trim(), full_name: fullName.trim(), password, telephone: telephone.trim(), secteur_ids: secteurIds });
         showToast("success", "Team Leader créé");
@@ -214,7 +214,7 @@ function SuperviseurModal({ open, editing, onClose, onSaved, showToast }: {
         {!editing && (
           <div>
             <label className="label">Mot de passe</label>
-            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" />
+            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" />
           </div>
         )}
         {editing && (
@@ -247,7 +247,7 @@ function PasswordModal({ superviseur, onClose, onSaved, showToast }: {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!superviseur) return;
-    if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); return; }
+    if (password.length < 8) { showToast("error", "Mot de passe : 8 caractères minimum"); return; }
     setSaving(true);
     try { await api.resetSuperviseurPassword(superviseur.id, password); onSaved(); }
     catch { showToast("error", "Erreur lors de la réinitialisation"); }
@@ -260,7 +260,7 @@ function PasswordModal({ superviseur, onClose, onSaved, showToast }: {
         <p className="text-sm text-gray-600">Définissez un nouveau mot de passe pour <strong>{superviseur?.full_name}</strong>.</p>
         <div>
           <label className="label">Nouveau mot de passe</label>
-          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" autoFocus />
+          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" autoFocus />
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>

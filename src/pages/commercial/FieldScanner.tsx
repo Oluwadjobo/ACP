@@ -514,7 +514,6 @@ export function FieldScanner() {
                   {result.debug && (
                     <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 space-y-0.5">
                       <p>Votre position : {result.debug.userLat.toFixed(6)}, {result.debug.userLon.toFixed(6)}</p>
-                      <p>Point de vente : {result.debug.pointLat.toFixed(6)}, {result.debug.pointLon.toFixed(6)}</p>
                     </div>
                   )}
                 </div>

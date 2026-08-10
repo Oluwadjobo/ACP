@@ -151,7 +151,7 @@ function AdminModal({ open, editing, teams, isSuperAdmin, onClose, onSaved, show
         await api.updateAdmin(editing.id, { email: email.trim(), full_name: fullName.trim(), ...(isSuperAdmin ? { role, team_id: teamId || null } : {}) });
         showToast("success", "Administrateur modifié");
       } else {
-        if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); setSaving(false); return; }
+        if (password.length < 8) { showToast("error", "Mot de passe : 8 caractères minimum"); setSaving(false); return; }
         await api.createAdmin({ email: email.trim(), full_name: fullName.trim(), password, ...(isSuperAdmin ? { role, team_id: teamId || null } : {}) });
         showToast("success", "Administrateur créé");
       }
@@ -174,7 +174,7 @@ function AdminModal({ open, editing, teams, isSuperAdmin, onClose, onSaved, show
         {!editing && (
           <div>
             <label className="label">Mot de passe</label>
-            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" />
+            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" />
           </div>
         )}
         {isSuperAdmin && (
@@ -214,7 +214,7 @@ function PasswordModal({ admin, onClose, onSaved, showToast }: {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!admin) return;
-    if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); return; }
+    if (password.length < 8) { showToast("error", "Mot de passe : 8 caractères minimum"); return; }
     setSaving(true);
     try { await api.resetAdminPassword(admin.id, password); onSaved(); }
     catch { showToast("error", "Erreur lors de la réinitialisation"); }
@@ -227,7 +227,7 @@ function PasswordModal({ admin, onClose, onSaved, showToast }: {
         <p className="text-sm text-gray-600">Définissez un nouveau mot de passe pour <strong>{admin?.full_name}</strong>. Il devra le changer à sa prochaine connexion.</p>
         <div>
           <label className="label">Nouveau mot de passe</label>
-          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" autoFocus />
+          <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" autoFocus />
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>
