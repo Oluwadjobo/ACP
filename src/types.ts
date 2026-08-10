@@ -1,5 +1,17 @@
 export type UserType = "admin" | "commercial" | "superviseur";
 
+export type AdminRole = "super_admin" | "admin";
+
+export type TeamCode = "YAOURT" | "EAU";
+
+export interface Team {
+  id: string;
+  code: TeamCode;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
 export type Permission =
   | "scan" | "create_point_vente" | "record_vente" | "create_promesse"
   | "control_terrain" | "view_history" | "view_ventes_non_realisees"
@@ -47,6 +59,8 @@ export interface Session {
   userType: UserType;
   fullName: string;
   userId: string;
+  teamId: string | null;
+  role: AdminRole | UserType;
 }
 
 export interface Secteur {
@@ -56,6 +70,7 @@ export interface Secteur {
   description: string | null;
   actif: boolean;
   color_code: string;
+  team_id?: string | null;
   created_at: string;
 }
 
@@ -68,6 +83,7 @@ export interface Commercial {
   superviseur_id?: string | null;
   superviseur_nom?: string | null;
   secteur_nom?: string | null;
+  team_id?: string | null;
   permissions?: Permissions;
   created_at: string;
   updated_at?: string;
@@ -88,6 +104,7 @@ export interface Superviseur {
   secteur_id?: string | null;
   secteur_nom?: string | null;
   tournees?: SuperviseurTournee[];
+  team_id?: string | null;
   permissions?: Permissions;
   created_at: string;
   updated_at?: string;
@@ -97,6 +114,8 @@ export interface AdminUser {
   id: string;
   email: string;
   full_name: string;
+  role?: AdminRole;
+  team_id?: string | null;
   must_change_password: boolean;
   permissions?: Permissions;
   created_at: string;
@@ -105,6 +124,7 @@ export interface AdminUser {
 export interface Produit {
   id: string;
   nom: string;
+  team_id?: string | null;
   created_at?: string;
 }
 
@@ -119,6 +139,7 @@ export interface PointVente {
   qr_token: string;
   secteur_id?: string | null;
   secteur_nom?: string | null;
+  team_id?: string | null;
   created_at: string;
   updated_at?: string;
 }

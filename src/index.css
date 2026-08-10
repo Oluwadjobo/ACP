@@ -4,6 +4,35 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* YAOURT (blue) — default theme */
+  --c-primary-50: #eff6ff;
+  --c-primary-100: #dbeafe;
+  --c-primary-200: #bfdbfe;
+  --c-primary-300: #93c5fd;
+  --c-primary-400: #60a5fa;
+  --c-primary-500: #3b82f6;
+  --c-primary-600: #2563eb;
+  --c-primary-700: #1d6fb8;
+  --c-primary-800: #1e4a8a;
+  --c-primary-900: #1e3a5f;
+  --c-primary-950: #172947;
+}
+
+:root[data-team="EAU"] {
+  --c-primary-50: #fef2f2;
+  --c-primary-100: #fee2e2;
+  --c-primary-200: #fecaca;
+  --c-primary-300: #fca5a5;
+  --c-primary-400: #f87171;
+  --c-primary-500: #f30714;
+  --c-primary-600: #dc050f;
+  --c-primary-700: #b91c1c;
+  --c-primary-800: #991b1b;
+  --c-primary-900: #7f1d1d;
+  --c-primary-950: #5c0e0e;
+}
+
 @layer base {
   * {
     -webkit-tap-highlight-color: transparent;

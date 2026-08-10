@@ -41,21 +41,33 @@ async function apiRequest<T>(
 }
 
 export const api = {
+  // Teams
+  listTeams: () => apiRequest<import("@/types").Team[]>("/teams", { method: "GET" }),
+
   // Auth
-  login: (body: { login: string; password: string }) =>
+  login: (body: { login: string; password: string; teamCode?: string }) =>
     apiRequest<{
       token: string;
       userType: string;
       fullName: string;
       userId: string;
       mustChangePassword?: boolean;
-    }>("/login", { method: "POST", body: JSON.stringify(body) }),
+      teamId: string | null;
+      role: string;
+      permissions: Record<string, boolean>;
+    }>("/login", { method: "POST", body: JSON.stringify({ login: body.login, password: body.password, team_code: body.teamCode }) }),
 
   logout: () => apiRequest<{ success: boolean }>("/logout", { method: "POST" }),
 
   me: () =>
-    apiRequest<{ userType: string; userId: string; fullName: string }>("/me", {
+    apiRequest<{ userType: string; userId: string; fullName: string; teamId: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
       method: "GET",
+    }),
+
+  switchTeam: (teamId: string | null) =>
+    apiRequest<{ success: boolean; teamId: string | null }>("/switch-team", {
+      method: "POST",
+      body: JSON.stringify({ team_id: teamId }),
     }),
 
   changePassword: (newPassword: string) =>
@@ -121,13 +133,13 @@ export const api = {
     method: "GET",
   }),
 
-  createAdmin: (body: { email: string; full_name: string; password: string }) =>
+  createAdmin: (body: { email: string; full_name: string; password: string; role?: string; team_id?: string | null }) =>
     apiRequest<import("@/types").AdminUser>("/admins", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  updateAdmin: (id: string, body: Partial<{ email: string; full_name: string }>) =>
+  updateAdmin: (id: string, body: Partial<{ email: string; full_name: string; role?: string; team_id?: string | null }>) =>
     apiRequest<import("@/types").AdminUser>(`/admins/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -283,7 +295,7 @@ export const api = {
     visite_id: string;
     point_vente_id: string;
     lignes: { produit_id: string; produit_nom: string; quantite: number; observation?: string }[];
-    livraison_immédiate?: boolean;
+    livraison_immediate?: boolean;
     observation?: string;
   }) =>
     apiRequest<{ id: string; bl_id?: string; bl_numero?: string; created_at: string }>("/ventes", {

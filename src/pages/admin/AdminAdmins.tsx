@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { UserPlus, Search, Pencil, KeyRound, Trash2, Shield } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AdminUser } from "@/types";
+import { useAuth } from "@/lib/auth";
+import type { AdminUser, Team } from "@/types";
 import { Modal } from "@/components/Modal";
 import { PermissionsEditor } from "@/components/PermissionsEditor";
 import { formatDate } from "@/lib/format";
 
 export function AdminAdmins() {
+  const { isSuperAdmin } = useAuth();
   const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -28,6 +31,9 @@ export function AdminAdmins() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (isSuperAdmin) api.listTeams().then(setTeams).catch(() => setTeams([]));
+  }, [isSuperAdmin]);
 
   const filtered = admins.filter(
     (a) =>
@@ -93,7 +99,7 @@ export function AdminAdmins() {
         )}
       </div>
 
-      <AdminModal open={modalOpen} editing={editing} onClose={() => setModalOpen(false)} onSaved={() => { setModalOpen(false); load(); }} showToast={showToast} />
+      <AdminModal open={modalOpen} editing={editing} teams={teams} isSuperAdmin={isSuperAdmin} onClose={() => setModalOpen(false)} onSaved={() => { setModalOpen(false); load(); }} showToast={showToast} />
       <PasswordModal admin={passwordModal} onClose={() => setPasswordModal(null)} onSaved={() => { setPasswordModal(null); showToast("success", "Mot de passe réinitialisé"); }} showToast={showToast} />
 
       <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Supprimer l'administrateur" maxWidth="max-w-md">
@@ -117,16 +123,24 @@ export function AdminAdmins() {
   );
 }
 
-function AdminModal({ open, editing, onClose, onSaved, showToast }: {
-  open: boolean; editing: AdminUser | null; onClose: () => void; onSaved: () => void; showToast: (type: "success" | "error", msg: string) => void;
+function AdminModal({ open, editing, teams, isSuperAdmin, onClose, onSaved, showToast }: {
+  open: boolean; editing: AdminUser | null; teams: Team[]; isSuperAdmin: boolean; onClose: () => void; onSaved: () => void; showToast: (type: "success" | "error", msg: string) => void;
 }) {
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("admin");
+  const [teamId, setTeamId] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) { setEmail(editing?.email || ""); setFullName(editing?.full_name || ""); setPassword(""); }
+    if (open) {
+      setEmail(editing?.email || "");
+      setFullName(editing?.full_name || "");
+      setPassword("");
+      setRole(editing?.role || "admin");
+      setTeamId(editing?.team_id || "");
+    }
   }, [open, editing]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -134,11 +148,11 @@ function AdminModal({ open, editing, onClose, onSaved, showToast }: {
     setSaving(true);
     try {
       if (editing) {
-        await api.updateAdmin(editing.id, { email: email.trim(), full_name: fullName.trim() });
+        await api.updateAdmin(editing.id, { email: email.trim(), full_name: fullName.trim(), ...(isSuperAdmin ? { role, team_id: teamId || null } : {}) });
         showToast("success", "Administrateur modifié");
       } else {
         if (password.length < 6) { showToast("error", "Mot de passe : 6 caractères minimum"); setSaving(false); return; }
-        await api.createAdmin({ email: email.trim(), full_name: fullName.trim(), password });
+        await api.createAdmin({ email: email.trim(), full_name: fullName.trim(), password, ...(isSuperAdmin ? { role, team_id: teamId || null } : {}) });
         showToast("success", "Administrateur créé");
       }
       onSaved();
@@ -162,6 +176,24 @@ function AdminModal({ open, editing, onClose, onSaved, showToast }: {
             <label className="label">Mot de passe</label>
             <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="6 caractères minimum" />
           </div>
+        )}
+        {isSuperAdmin && (
+          <>
+            <div>
+              <label className="label">Rôle</label>
+              <select className="input" value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="admin">Administrateur d'équipe</option>
+                <option value="super_admin">Super administrateur</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Équipe</label>
+              <select className="input" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
+                <option value="">Vue globale</option>
+                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+            </div>
+          </>
         )}
         <div className="flex gap-3 justify-end pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>

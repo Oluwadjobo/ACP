@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { TeamSelectionPage } from "@/pages/TeamSelectionPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { AdminLayout } from "@/components/AdminLayout";
@@ -51,20 +52,20 @@ function RootRedirect() {
   if (token && userType) {
     if (mustChangePassword) return <ChangePasswordPage />;
     if (userType === "admin") return <Navigate to="/admin" replace />;
-    // Redirect to first accessible page
     if (hasPermission("scan")) return <Navigate to={fieldHome[userType] || "/"} replace />;
     if (hasPermission("view_history")) return <Navigate to={`${fieldHome[userType] || ""}/historique`} replace />;
     if (userType === "superviseur" && hasPermission("view_ventes_non_realisees")) return <Navigate to="/superviseur/ventes-non-realisees" replace />;
     if (userType === "superviseur" && hasPermission("control_terrain")) return <Navigate to="/superviseur/controle-terrain" replace />;
     return <Navigate to={fieldHome[userType] || "/"} replace />;
   }
-  return <LoginPage />;
+  return <TeamSelectionPage />;
 }
 
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<RootRedirect />} />
+      <Route path="/login/:team" element={<LoginPage />} />
 
       {/* Admin routes */}
       <Route path="/admin" element={<ProtectedRoute allow="admin" permission="view_dashboard"><AdminLayout><AdminDashboard /></AdminLayout></ProtectedRoute>} />
