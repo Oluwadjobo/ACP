@@ -455,7 +455,7 @@ async function handleRoute(req: Request): Promise<Response> {
         }
         return jsonResponse({
           token, userType: "superviseur", fullName: sup.full_name, userId: sup.id,
-          permissions, teamId: sup.team_id, role: "superviseur", teamCode, teamColor,
+          mustChangePassword: sup.must_change_password ?? false, permissions, teamId: sup.team_id, role: "superviseur", teamCode, teamColor,
         });
       }
       return await failLogin();
@@ -483,7 +483,7 @@ async function handleRoute(req: Request): Promise<Response> {
         }
         return jsonResponse({
           token, userType: "commercial", fullName: commercial.full_name, userId: commercial.id,
-          permissions, teamId: commercial.team_id, role: "commercial", teamCode, teamColor,
+          mustChangePassword: commercial.must_change_password ?? false, permissions, teamId: commercial.team_id, role: "commercial", teamCode, teamColor,
         });
       }
       return await failLogin();
@@ -503,11 +503,17 @@ async function handleRoute(req: Request): Promise<Response> {
     const session = await getSession(token);
     if (!session) return jsonError(401, "Session expirée");
     let role = session.user_type;
+    let mustChangePassword = false;
     let teamCode: string | null = null;
     let teamColor: string | null = null;
     if (session.user_type === "admin") {
-      const { data: adminData } = await supabase.from("admins").select("role, team_id").eq("id", session.user_id).maybeSingle();
+      const { data: adminData } = await supabase.from("admins").select("role, team_id, must_change_password").eq("id", session.user_id).maybeSingle();
       role = adminData?.role || "admin";
+      mustChangePassword = adminData?.must_change_password ?? false;
+    } else {
+      const userTable = session.user_type === "superviseur" ? "superviseurs" : "commerciaux";
+      const { data: userData } = await supabase.from(userTable).select("must_change_password").eq("id", session.user_id).maybeSingle();
+      mustChangePassword = userData?.must_change_password ?? false;
     }
     if (session.team_id) {
       const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", session.team_id).maybeSingle();
@@ -517,7 +523,7 @@ async function handleRoute(req: Request): Promise<Response> {
     return jsonResponse({
       userType: session.user_type, userId: session.user_id,
       fullName: session.full_name, permissions: session.permissions,
-      teamId: session.team_id, role, teamCode, teamColor,
+      mustChangePassword, teamId: session.team_id, role, teamCode, teamColor,
     });
   }
 
@@ -549,6 +555,20 @@ async function handleRoute(req: Request): Promise<Response> {
   if (!token) return jsonError(401, "Non authentifié");
   const session = await getSession(token);
   if (!session) return jsonError(401, "Session expirée");
+
+  const userTable = session.user_type === "admin" ? "admins" : session.user_type === "superviseur" ? "superviseurs" : "commerciaux";
+  if (path === "/change-password" && method === "POST") {
+    const { newPassword } = await req.json();
+    if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
+    const password_hash = await hashPassword(newPassword);
+    const { error } = await supabase.from(userTable).update({ password_hash, must_change_password: false }).eq("id", session.user_id);
+    if (error) return jsonError(500, "Erreur lors du changement de mot de passe");
+    return jsonResponse({ success: true });
+  }
+  const { data: pendingPasswordUser } = await supabase.from(userTable).select("must_change_password").eq("id", session.user_id).maybeSingle();
+  if (pendingPasswordUser?.must_change_password && path !== "/change-password") {
+    return jsonError(403, "Vous devez changer votre mot de passe avant de continuer");
+  }
 
   const perms = (session.permissions as Record<string, boolean>) || {};
   const teamId = session.team_id;
@@ -599,15 +619,6 @@ async function handleRoute(req: Request): Promise<Response> {
       return null;
     }
 
-    // --- CHANGE PASSWORD ---
-    if (path === "/change-password" && method === "POST") {
-      const { newPassword } = await req.json();
-      if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
-      const password_hash = await hashPassword(newPassword);
-      const { error } = await supabase.from("admins").update({ password_hash, must_change_password: false }).eq("id", session.user_id);
-      if (error) return jsonError(500, "Erreur lors du changement de mot de passe");
-      return jsonResponse({ success: true });
-    }
 
     // --- SECTEURS CRUD ---
     if (path === "/secteurs" && method === "GET") {
@@ -704,7 +715,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!superviseur_id) return jsonError(400, "Un superviseur de rattachement est obligatoire");
       if (!Array.isArray(secteur_ids) || secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       const password_hash = await hashPassword(password);
-      const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
+      const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash, must_change_password: true };
       if (telephone) insertData.telephone = telephone.trim();
       if (superviseur_id) insertData.superviseur_id = superviseur_id;
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
@@ -748,7 +759,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const { password } = await req.json();
       if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       const password_hash = await hashPassword(password);
-      let query = supabase.from("commerciaux").update({ password_hash, updated_at: new Date().toISOString() }).eq("id", id);
+      let query = supabase.from("commerciaux").update({ password_hash, must_change_password: true, updated_at: new Date().toISOString() }).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { error } = await query;
       if (error) return jsonError(500, "Erreur lors de la réinitialisation");
@@ -793,7 +804,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       if (!Array.isArray(secteur_ids) || secteur_ids.length === 0) return jsonError(400, "Au moins une tournée affectée est obligatoire");
       const password_hash = await hashPassword(password);
-      const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash };
+      const insertData: Record<string, unknown> = { identifiant: identifiant.trim(), full_name: full_name.trim(), password_hash, must_change_password: true };
       if (telephone) insertData.telephone = telephone.trim();
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
       const { data, error } = await supabase.from("superviseurs").insert(insertData).select("id, identifiant, full_name, active, telephone, created_at").maybeSingle();
@@ -842,7 +853,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const { password } = await req.json();
       if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
       const password_hash = await hashPassword(password);
-      let query = supabase.from("superviseurs").update({ password_hash, updated_at: new Date().toISOString() }).eq("id", id);
+      let query = supabase.from("superviseurs").update({ password_hash, must_change_password: true, updated_at: new Date().toISOString() }).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { error } = await query;
       if (error) return jsonError(500, "Erreur lors de la réinitialisation");

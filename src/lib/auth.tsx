@@ -70,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           teamColor: (data as { teamColor?: string }).teamColor ?? null,
           role: data.role as AdminRole | UserType,
           permissions: data.permissions as Permissions,
-          mustChangePassword: false,
+          mustChangePassword: data.mustChangePassword ?? false,
           loading: false,
         });
       })

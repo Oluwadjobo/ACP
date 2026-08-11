@@ -69,7 +69,7 @@ export const api = {
   logout: () => apiRequest<{ success: boolean }>("/logout", { method: "POST" }),
 
   me: () =>
-    apiRequest<{ userType: string; userId: string; fullName: string; teamId: string | null; teamCode?: string | null; teamColor?: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
+    apiRequest<{ userType: string; userId: string; fullName: string; mustChangePassword?: boolean; teamId: string | null; teamCode?: string | null; teamColor?: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
       method: "GET",
     }),
 
