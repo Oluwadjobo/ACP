@@ -65,7 +65,7 @@ function ProtectedRoute({ children, allow, permission }: { children: React.React
 
 function RootRedirect() {
   const { token, userType, mustChangePassword, loading, hasPermission } = useAuth();
-  if (loading) return <LoadingScreen />;
+  if (loading && token) return <LoadingScreen />;
   if (token && userType) {
     if (mustChangePassword) return <ChangePasswordPage />;
     if (userType === "admin") return <Navigate to="/admin" replace />;
