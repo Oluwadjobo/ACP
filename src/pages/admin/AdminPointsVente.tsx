@@ -168,6 +168,7 @@ function PointVenteModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!secteurId) { showToast("error", "Veuillez sélectionner une tournée"); return; }
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
     if (isNaN(lat) || lat < -90 || lat > 90) { showToast("error", "Latitude invalide"); return; }
@@ -205,16 +206,16 @@ function PointVenteModal({
           <input className="input" value={city} onChange={(e) => setCity(e.target.value)} required placeholder="Paris" />
         </div>
         <div>
-          <label className="label">Tournée</label>
-          <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)}>
-            <option value="">Aucune tournée</option>
+          <label className="label">Tournée <span className="text-error-500">*</span></label>
+          <select className="input" value={secteurId} onChange={(e) => setSecteurId(e.target.value)} required disabled={secteurs.length === 0}>
+            <option value="">Sélectionnez une tournée</option>
             {secteurs.filter(s => s.actif).map((s) => (
               <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
             ))}
           </select>
           {secteurs.length === 0 && (
             <p className="text-xs text-warning-600 mt-1">
-              Aucune tournée disponible pour votre profil. Veuillez contacter un administrateur.
+              Aucune tournée ne vous est affectée. Veuillez contacter un administrateur.
             </p>
           )}
         </div>

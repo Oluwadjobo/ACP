@@ -1518,19 +1518,22 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
 
-    // --- SECTEURS LIST (team leaders: only their assigned tournées) ---
+    // --- SECTEURS LIST (only the field user's assigned tournées) ---
     if (path === "/secteurs" && method === "GET") {
       const denied = requirePermission("create_point_vente");
       if (denied) return denied;
-      let tltQuery = supabase.from("team_leader_tournees").select("secteur_id").eq("superviseur_id", session.user_id);
-      if (userTeamId) tltQuery = tltQuery.eq("team_id", userTeamId);
-      const { data: tltRows, error: tltError } = await tltQuery;
-      if (tltError) return jsonError(500, "Erreur lors de la récupération des tournées");
-      const secteurIds = (tltRows ?? []).map((r: Record<string, unknown>) => String(r.secteur_id));
+      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
+      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
+      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, session.user_id);
+      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
+      const { data: assignmentRows, error: assignmentError } = await assignments;
+      if (assignmentError) return jsonError(500, "Erreur lors de la récupération des tournées");
+      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
       if (secteurIds.length === 0) return jsonResponse([]);
-      const { data: secteurs, error: secError } = await supabase
-        .from("secteurs").select("*").in("id", secteurIds).order("created_at", { ascending: false });
-      if (secError) return jsonError(500, "Erreur de lecture");
+      let secteurQuery = supabase.from("secteurs").select("*").in("id", secteurIds).eq("actif", true).order("created_at", { ascending: false });
+      if (userTeamId) secteurQuery = secteurQuery.eq("team_id", userTeamId);
+      const { data: secteurs, error: secteurError } = await secteurQuery;
+      if (secteurError) return jsonError(500, "Erreur de lecture");
       return jsonResponse(secteurs);
     }
 
@@ -1538,11 +1541,17 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/points-vente" && method === "POST") {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
       const { name, address, city, latitude, longitude, secteur_id } = await req.json();
-      if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
+      if (!name || !address || !city || latitude == null || longitude == null || !secteur_id) return jsonError(400, "Tous les champs sont requis, y compris la tournée");
+      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
+      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
+      let assignmentQuery = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, session.user_id).eq("secteur_id", secteur_id);
+      if (userTeamId) assignmentQuery = assignmentQuery.eq("team_id", userTeamId);
+      const { data: assignment, error: assignmentError } = await assignmentQuery.maybeSingle();
+      if (assignmentError) return jsonError(500, "Erreur lors de la vérification de la tournée");
+      if (!assignment) return jsonError(403, "Cette tournée ne vous est pas affectée");
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
-      if (secteur_id) insertData.secteur_id = secteur_id;
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id };
       if (userTeamId) insertData.team_id = userTeamId;
       const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Droplets, Milk, ArrowRight, MapPin, Shield } from "lucide-react";
+import { Droplets, Milk, ArrowRight, MapPin } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Team } from "@/types";
 
@@ -95,15 +95,16 @@ export function TeamSelectionPage() {
         </div>
       )}
 
-      <button
-        onClick={() => navigate("/login/superadmin")}
-        className="mt-8 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-600 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900"
-      >
-        <Shield size={16} />
-        Connexion Super Administrateur
-      </button>
-      <p className="mt-6 text-xs text-gray-400 text-center max-w-md">
-        Vous ne pouvez accéder qu'aux données de votre équipe. Si vous n'êtes pas sûr de votre équipe, contactez votre administrateur.
+      <p className="mt-10 text-xs text-gray-400 text-center max-w-md">
+        Vous ne pouvez accéder qu'aux données de votre équipe. Si vous n'êtes pas sûr de votre équipe, contactez votre {" "}
+        <button
+          type="button"
+          onClick={() => navigate("/login/superadmin")}
+          className="font-semibold text-gray-500 underline underline-offset-2 transition-colors hover:text-gray-900"
+        >
+          administrateur
+        </button>
+        .
       </p>
     </div>
   );
