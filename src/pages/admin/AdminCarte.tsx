@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers } from "lucide-react";
+import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
@@ -59,6 +59,7 @@ export function AdminCarte() {
   const [selected, setSelected] = useState<PointVente | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showZones, setShowZones] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(true);
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fullscreenRef = useRef<HTMLDivElement | null>(null);
@@ -267,35 +268,40 @@ export function AdminCarte() {
         <div className={`card overflow-hidden p-0 relative ${isFullscreen ? "lg:col-span-2 h-full min-h-0" : "lg:col-span-2"}`}>
           <div ref={containerRef} className={`w-full ${isFullscreen ? "h-full" : "h-[500px] lg:h-[600px]"}`} />
 
-          {/* Enriched legend — always visible */}
           {activeSecteurs.length > 0 && (
-            <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-gray-200 p-3 w-[210px]">
-              <span className="text-xs font-bold text-gray-700 uppercase tracking-wide block mb-2">Légende</span>
-              <div className="space-y-1.5">
-                {activeSecteurs.map((s) => {
-                  const count = countBySecteur[s.id] || 0;
-                  const color = s.color_code || "#E63946";
-                  return (
-                    <div key={s.id} className="flex items-center gap-2">
-                      <span
-                        className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white shadow-sm"
-                        style={{ backgroundColor: color }}
-                      />
-                      <span className="text-xs font-medium text-gray-700 truncate flex-1">{s.nom}</span>
-                      <span
-                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-md text-white flex-shrink-0"
-                        style={{ backgroundColor: color }}
-                      >
-                        {count}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-2 pt-2 border-t border-gray-200 flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
-                <span className="text-xs font-bold text-gray-900">{totalVisible}</span>
-              </div>
+            <div className={`absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-gray-200 p-3 ${legendOpen ? "w-[min(440px,calc(100%-2rem))]" : "w-auto"}`}>
+              <button
+                type="button"
+                onClick={() => setLegendOpen((open) => !open)}
+                className="flex items-center justify-between gap-4 w-full text-left"
+                aria-expanded={legendOpen}
+              >
+                <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">Légende</span>
+                {legendOpen ? <ChevronDown size={15} className="text-gray-500" /> : <ChevronUp size={15} className="text-gray-500" />}
+              </button>
+              {legendOpen && (
+                <>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-1.5">
+                    {activeSecteurs.map((s) => {
+                      const count = countBySecteur[s.id] || 0;
+                      const color = s.color_code || "#E63946";
+                      return (
+                        <div key={s.id} className="flex items-center gap-2 min-w-0">
+                          <span className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white shadow-sm" style={{ backgroundColor: color }} />
+                          <span className="text-xs font-medium text-gray-700 truncate flex-1">{s.nom}</span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md text-white flex-shrink-0" style={{ backgroundColor: color }}>
+                            {count}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-gray-200 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
+                    <span className="text-xs font-bold text-gray-900">{totalVisible}</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

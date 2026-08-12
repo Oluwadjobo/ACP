@@ -261,7 +261,37 @@ function QrModal({ point, onClose }: { point: PointVente | null; onClose: () => 
       width: 600,
       margin: 2,
       color: { dark: "#0d1b5e", light: "#ffffff" },
-    }).then(setDataUrl);
+    }).then((qrUrl) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 700;
+        canvas.height = 860;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = "#0d1b5e";
+        context.lineWidth = 8;
+        context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
+        context.drawImage(image, 50, 50, 600, 600);
+        context.strokeStyle = "#dbe3f0";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(50, 690);
+        context.lineTo(650, 690);
+        context.stroke();
+        context.fillStyle = "#0d1b5e";
+        context.textAlign = "center";
+        context.font = "700 30px Arial";
+        context.fillText(point.name, 350, 745, 590);
+        context.font = "700 25px Arial";
+        context.fillText(point.code, 350, 795, 590);
+        setDataUrl(canvas.toDataURL("image/png"));
+      };
+      image.src = qrUrl;
+    });
   }, [point]);
 
   if (!point) return null;
@@ -306,7 +336,19 @@ function QrModal({ point, onClose }: { point: PointVente | null; onClose: () => 
     const imgSize = 90;
     const imgX = (pageWidth - imgSize) / 2;
     pdf.addImage(dataUrl, "PNG", imgX, y, imgSize, imgSize);
-    y += imgSize + 15;
+    y += imgSize + 10;
+
+    const frameX = 35;
+    const frameWidth = pageWidth - 70;
+    pdf.setDrawColor(13, 27, 94);
+    pdf.setLineWidth(0.8);
+    pdf.rect(frameX, y, frameWidth, 25);
+    pdf.setFontSize(13);
+    pdf.setTextColor(13, 27, 94);
+    pdf.text(point.name, pageWidth / 2, y + 10, { align: "center", maxWidth: frameWidth - 12 });
+    pdf.setFontSize(11);
+    pdf.text(point.code, pageWidth / 2, y + 19, { align: "center" });
+    y += 34;
 
     pdf.setFontSize(9);
     pdf.setTextColor(150, 150, 150);
