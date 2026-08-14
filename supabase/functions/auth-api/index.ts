@@ -85,6 +85,7 @@ function pickSecteurColor(usedColors: string[]): string {
 const FIELD_PERMISSIONS = [
   "scan", "create_point_vente", "record_vente", "create_promesse",
   "control_terrain", "view_history", "view_ventes_non_realisees",
+  "use_geolocation",
 ] as const;
 
 const DASHBOARD_PERMISSIONS = [
@@ -1556,6 +1557,89 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }
       return jsonResponse(data, 201);
+    }
+
+    // --- GEOLOCALISATION SANS CAMERA ---
+    // Returns the list of points de vente within a given radius (meters)
+    // of the user's GPS position. Gated by the "use_geolocation" permission.
+    if (path === "/geoloc-nearby" && method === "POST") {
+      const denied = requirePermission("use_geolocation"); if (denied) return denied;
+      const { latitude, longitude, radius } = await req.json();
+      if (typeof latitude !== "number" || typeof longitude !== "number") return jsonError(400, "Coordonnées GPS invalides");
+      const maxRadius = Math.min(Math.max(typeof radius === "number" ? radius : 500, 50), 5000);
+      let query = supabase.from("points_vente").select("id, code, name, address, city, latitude, longitude, secteur_id, qr_token");
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data: allPoints, error } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      const nearby = (allPoints || [])
+        .filter((p: Record<string, unknown>) => typeof p.latitude === "number" && typeof p.longitude === "number")
+        .map((p: Record<string, unknown>) => ({
+          ...p,
+          distance_meters: haversineMeters(latitude, longitude, p.latitude as number, p.longitude as number),
+        }))
+        .filter((p: Record<string, unknown> & { distance_meters: number }) => p.distance_meters <= maxRadius)
+        .sort((a: { distance_meters: number }, b: { distance_meters: number }) => a.distance_meters - b.distance_meters)
+        .slice(0, 20);
+      return jsonResponse(nearby);
+    }
+
+    // --- RECORD VISIT VIA GEOLOCALISATION ---
+    // Validates presence without a QR scan: the user selects a nearby point
+    // and the server checks the GPS distance just like a scan-based visit.
+    if (path === "/geoloc-visit" && method === "POST") {
+      const denied = requirePermission("use_geolocation"); if (denied) return denied;
+      const { point_vente_id, latitude, longitude, accuracy } = await req.json();
+      if (!point_vente_id || typeof latitude !== "number" || typeof longitude !== "number") return jsonError(400, "Paramètres invalides");
+      let pvQuery = supabase.from("points_vente").select("id, name, latitude, longitude, qr_token").eq("id", point_vente_id);
+      if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
+      const { data: pv, error: pvError } = await pvQuery.maybeSingle();
+      if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
+      const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
+      const MAX_DISTANCE = 30;
+      if (distance > MAX_DISTANCE) {
+        return jsonResponse({
+          status: "out_of_zone",
+          distance,
+          message: `Vous êtes à ${distance} m du point de vente. Rapprochez-vous à moins de ${MAX_DISTANCE} m.`,
+          debug: { userLat: latitude, userLon: longitude, pointName: pv.name },
+        });
+      }
+      // Check for duplicate visit today
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      let dupQuery = supabase.from("visites").select("id, visited_at").eq("point_vente_id", point_vente_id).gte("visited_at", todayStart.toISOString());
+      if (userRole === "commercial") {
+        dupQuery = dupQuery.eq("commercial_id", userId);
+      } else {
+        dupQuery = dupQuery.eq("superviseur_id", userId);
+      }
+      const { data: existing } = await dupQuery.maybeSingle();
+      if (existing) {
+        return jsonResponse({
+          status: "duplicate",
+          message: "Vous avez déjà visité ce point de vente aujourd'hui.",
+          visit: { id: existing.id, visited_at: existing.visited_at, distance_meters: distance, status: "duplicate", vente_status: null },
+        });
+      }
+      const insertData: Record<string, unknown> = {
+        point_vente_id,
+        latitude,
+        longitude,
+        accuracy: typeof accuracy === "number" ? accuracy : null,
+        distance_meters: distance,
+        status: "confirmed",
+        user_role: userRole,
+      };
+      if (userRole === "commercial") insertData.commercial_id = userId;
+      else insertData.superviseur_id = userId;
+      if (userTeamId) insertData.team_id = userTeamId;
+      const { data: visit, error: visitError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status").maybeSingle();
+      if (visitError) return jsonError(500, "Erreur lors de l'enregistrement de la visite");
+      return jsonResponse({
+        status: "confirmed",
+        distance,
+        visit: { id: visit.id, visited_at: visit.visited_at, distance_meters: visit.distance_meters, status: visit.status, vente_status: null },
+        pointName: pv.name,
+      });
     }
   }
 

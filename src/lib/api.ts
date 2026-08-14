@@ -294,6 +294,18 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  geolocNearby: (body: { latitude: number; longitude: number; radius?: number }) =>
+    apiRequest<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; distance_meters: number }[]>("/geoloc-nearby", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  geolocVisit: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy?: number }) =>
+    apiRequest<import("@/types").VisitResult & { pointName?: string }>("/geoloc-visit", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   finalizeVisit: (body: { visite_id: string; vente_status: string; motif?: string }) =>
     apiRequest<{ success: boolean; visite_id: string; vente_status: string }>("/visites/finalize", {
       method: "POST",

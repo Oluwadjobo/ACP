@@ -60,6 +60,7 @@ export function AdminCarte() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showZones, setShowZones] = useState(false);
   const [legendOpen, setLegendOpen] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fullscreenRef = useRef<HTMLDivElement | null>(null);
@@ -72,6 +73,10 @@ export function AdminCarte() {
       .then(([pts, secs]) => {
         setPoints(pts);
         setSecteurs(secs);
+      })
+      .catch((err) => {
+        console.error("AdminCarte load error", err);
+        setError(err instanceof Error ? err.message : "Erreur lors du chargement de la carte");
       })
       .finally(() => setLoading(false));
   }, []);
@@ -128,16 +133,18 @@ export function AdminCarte() {
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [isFullscreen, loading]);
 
+  const validPoints = useMemo(() => points.filter((p) => typeof p.latitude === "number" && typeof p.longitude === "number" && !isNaN(p.latitude) && !isNaN(p.longitude)), [points]);
+
   const filtered = useMemo(() => {
-    if (!search) return points;
+    if (!search) return validPoints;
     const q = search.toLowerCase();
-    return points.filter(
+    return validPoints.filter(
       (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.city.toLowerCase().includes(q) ||
-        p.address.toLowerCase().includes(q)
+        (p.name || "").toLowerCase().includes(q) ||
+        (p.city || "").toLowerCase().includes(q) ||
+        (p.address || "").toLowerCase().includes(q)
     );
-  }, [points, search]);
+  }, [validPoints, search]);
 
   // Render markers
   useEffect(() => {
@@ -262,6 +269,12 @@ export function AdminCarte() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-3 text-sm text-error-700">
+          {error}
+        </div>
+      )}
 
       <div className={`grid grid-cols-1 lg:grid-cols-3 gap-6 ${isFullscreen ? "flex-1 min-h-0 mt-4" : ""}`}>
         {/* Map */}

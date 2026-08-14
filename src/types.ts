@@ -17,13 +17,15 @@ export type Permission =
   | "control_terrain" | "view_history" | "view_ventes_non_realisees"
   | "view_dashboard" | "view_carte" | "manage_secteurs" | "manage_commerciaux"
   | "manage_superviseurs" | "manage_admins" | "manage_produits" | "manage_points_vente"
-  | "manage_bons_livraison" | "view_visites" | "view_ventes" | "view_controles";
+  | "manage_bons_livraison" | "view_visites" | "view_ventes" | "view_controles"
+  | "use_geolocation";
 
 export type Permissions = Record<Permission, boolean>;
 
 export const FIELD_PERMISSIONS: Permission[] = [
   "scan", "create_point_vente", "record_vente", "create_promesse",
   "control_terrain", "view_history", "view_ventes_non_realisees",
+  "use_geolocation",
 ];
 
 export const DASHBOARD_PERMISSIONS: Permission[] = [
@@ -52,6 +54,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   view_visites: "Voir les visites",
   view_ventes: "Voir les ventes",
   view_controles: "Voir les contrôles",
+  use_geolocation: "Géolocalisation (sans caméra)",
 };
 
 export interface Session {

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, LocateFixed, Navigation } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
 import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
@@ -49,6 +49,11 @@ export function FieldScanner() {
   const [venteLignes, setVenteLignes] = useState<VenteLigneForm[]>([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]);
   const [venteObservation, setVenteObservation] = useState("");
   const [blNumero, setBlNumero] = useState<string | null>(null);
+
+  // Geolocation (no camera) state
+  const [geoMode, setGeoMode] = useState(false);
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geoNearby, setGeoNearby] = useState<{ id: string; code: string; name: string; address: string; city: string; distance_meters: number }[]>([]);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -135,6 +140,7 @@ export function FieldScanner() {
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
     setVenteLignes([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]); setVenteObservation(""); setBlNumero(null);
     setRetrying(false);
+    setGeoMode(false); setGeoNearby([]);
   };
 
   const retryGps = async () => {
@@ -157,6 +163,55 @@ export function FieldScanner() {
       else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
     } finally {
       setRetrying(false);
+      setGpsStatus(null);
+    }
+  };
+
+  const startGeoloc = async () => {
+    setError(null);
+    setGeoMode(true);
+    setGeoLoading(true);
+    setGeoNearby([]);
+    try {
+      const position = await getAccuratePosition(20000, 50);
+      const nearby = await api.geolocNearby({ latitude: position.latitude, longitude: position.longitude, radius: 1000 });
+      setGeoNearby(nearby);
+      if (nearby.length === 0) {
+        setError("Aucun point de vente trouvé dans un rayon de 1 km autour de votre position.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
+      setGeoMode(false);
+    } finally {
+      setGeoLoading(false);
+    }
+  };
+
+  const selectGeolocPoint = async (pointId: string) => {
+    setError(null);
+    setGpsStatus("Récupération de votre position GPS (haute précision)...");
+    setState("resolving");
+    try {
+      const position = await getAccuratePosition(20000, 15);
+      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
+      const selectedPoint = geoNearby.find((p) => p.id === pointId);
+      setPointName(selectedPoint?.name || visitResult.pointName || null);
+      setPointId(pointId);
+      setResult(visitResult);
+      setGpsStatus(null);
+      if (visitResult.status === "confirmed") {
+        setState("action");
+        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
+      } else {
+        setState("result");
+      }
+    } catch (err) {
+      if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
+      else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
+      setState("idle");
+      setGeoMode(false);
+    } finally {
       setGpsStatus(null);
     }
   };
@@ -240,6 +295,9 @@ export function FieldScanner() {
             <h1 className="text-xl font-bold text-gray-900 mb-2">Scanner un QR Code</h1>
             <p className="text-gray-500 text-sm mb-8">Appuyez sur le bouton ci-dessous pour ouvrir la caméra et scanner le QR code affiché dans le point de vente.</p>
             <button onClick={startCamera} className="btn-primary w-full text-base py-4"><Camera size={22} /> Ouvrir la caméra</button>
+            {hasPermission("use_geolocation") && (
+              <button onClick={startGeoloc} className="btn-secondary w-full mt-3"><Navigation size={18} /> Géolocaliser sans caméra</button>
+            )}
             {hasPermission("create_point_vente") && (
               <button onClick={() => setShowCreateModal(true)} className="btn-secondary w-full mt-3"><Store size={18} /> Créer un point de vente</button>
             )}
@@ -252,6 +310,42 @@ export function FieldScanner() {
             <h1 className="text-lg font-bold text-gray-900 mb-2">Erreur</h1>
             <p className="text-gray-500 text-sm mb-6">{error}</p>
             <button onClick={startCamera} className="btn-primary w-full"><RefreshCw size={18} /> Réessayer</button>
+          </div>
+        )}
+
+        {geoMode && state === "idle" && (
+          <div className="w-full max-w-sm animate-fade-in">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 rounded-full bg-primary-50 flex items-center justify-center mx-auto mb-4"><Navigation size={40} className="text-primary-600" /></div>
+              <h1 className="text-xl font-bold text-gray-900 mb-1">Géolocalisation</h1>
+              <p className="text-gray-500 text-sm">Sélectionnez le point de vente où vous vous trouvez.</p>
+            </div>
+            {geoLoading ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 size={28} className="animate-spin text-primary-500 mb-3" />
+                <p className="text-sm text-gray-500">Recherche des points de vente à proximité...</p>
+              </div>
+            ) : geoNearby.length > 0 ? (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
+                {geoNearby.map((p) => (
+                  <button key={p.id} onClick={() => selectGeolocPoint(p.id)} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-primary-200 transition-all text-left">
+                    <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0"><Store size={20} className="text-primary-600" /></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
+                      <p className="text-xs text-primary-600 font-semibold mt-0.5">{p.distance_meters} m</p>
+                    </div>
+                    <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3"><MapPin size={22} className="text-gray-400" /></div>
+                <p className="text-gray-500 text-sm mb-4">{error || "Aucun point trouvé à proximité."}</p>
+              </div>
+            )}
+            <button onClick={() => { setGeoMode(false); setError(null); }} className="btn-secondary w-full mt-4">Retour</button>
           </div>
         )}
 
