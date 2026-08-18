@@ -1,6 +1,6 @@
 import { type ReactNode, useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Truck, ClipboardList } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Permission, Team } from "@/types";
@@ -18,6 +18,8 @@ const allNavItems: NavItem[] = [
   { path: "/admin/secteurs", label: "Tournées", icon: MapPin, permission: "manage_secteurs" },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
   { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
+  { path: "/admin/agents-livreur", label: "Agents livreur", icon: Truck, permission: "manage_agents_livreur" },
+  { path: "/admin/commandes", label: "Commandes", icon: ClipboardList, permission: "view_dashboard" },
   { path: "/admin/admins", label: "Administrateurs", icon: Shield, permission: "manage_admins" },
   { path: "/admin/produits", label: "Produits", icon: Package, permission: "manage_produits" },
   { path: "/admin/points-vente", label: "Points de vente", icon: Store, permission: "manage_points_vente" },

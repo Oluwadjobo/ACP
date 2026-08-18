@@ -86,29 +86,41 @@ const FIELD_PERMISSIONS = [
   "scan", "create_point_vente", "record_vente", "create_promesse",
   "control_terrain", "view_history", "view_ventes_non_realisees",
   "use_geolocation",
+  "search_point_vente", "navigate_to_point_vente",
+] as const;
+
+const AGENT_LIVREUR_PERMISSIONS = [
+  "view_commandes_livraison", "view_commande_detail", "validate_livraison",
+  "view_historique_livraisons",
+  "search_point_vente", "navigate_to_point_vente",
 ] as const;
 
 const DASHBOARD_PERMISSIONS = [
   "view_dashboard", "view_carte", "manage_secteurs", "manage_commerciaux",
   "manage_superviseurs", "manage_admins", "manage_produits", "manage_points_vente",
   "manage_bons_livraison", "view_visites", "view_ventes", "view_controles",
+  "manage_agents_livreur",
 ] as const;
 
-const ALL_PERMISSIONS = [...FIELD_PERMISSIONS, ...DASHBOARD_PERMISSIONS];
+const ALL_PERMISSIONS = [...FIELD_PERMISSIONS, ...AGENT_LIVREUR_PERMISSIONS, ...DASHBOARD_PERMISSIONS];
 
 const DEFAULT_ADMIN_PERMS: Record<string, boolean> = Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, true]));
 const DEFAULT_SUPERVISEUR_PERMS: Record<string, boolean> = Object.fromEntries(
-  ["scan", "create_point_vente", "record_vente", "create_promesse", "control_terrain", "view_history", "view_ventes_non_realisees"].map((p) => [p, true])
+  ["scan", "create_point_vente", "record_vente", "create_promesse", "control_terrain", "view_history", "view_ventes_non_realisees", "search_point_vente", "navigate_to_point_vente"].map((p) => [p, true])
 );
 const DEFAULT_COMMERCIAL_PERMS: Record<string, boolean> = Object.fromEntries(
-  ["scan", "create_point_vente", "record_vente", "view_history"].map((p) => [p, true])
+  ["scan", "create_point_vente", "record_vente", "view_history", "search_point_vente", "navigate_to_point_vente"].map((p) => [p, true])
+);
+const DEFAULT_AGENT_LIVREUR_PERMS: Record<string, boolean> = Object.fromEntries(
+  ["view_commandes_livraison", "view_commande_detail", "validate_livraison", "view_historique_livraisons", "search_point_vente", "navigate_to_point_vente"].map((p) => [p, true])
 );
 
-type UserType = "admin" | "commercial" | "superviseur";
+type UserType = "admin" | "commercial" | "superviseur" | "agent_livreur";
 
 function getDefaultPermissions(userType: UserType): Record<string, boolean> {
   if (userType === "admin") return { ...DEFAULT_ADMIN_PERMS };
   if (userType === "superviseur") return { ...DEFAULT_SUPERVISEUR_PERMS };
+  if (userType === "agent_livreur") return { ...DEFAULT_AGENT_LIVREUR_PERMS };
   return { ...DEFAULT_COMMERCIAL_PERMS };
 }
 
@@ -127,7 +139,7 @@ function normalizePermissions(raw: unknown, userType: UserType): Record<string, 
 }
 
 async function getUserPermissions(userType: UserType, userId: string): Promise<Record<string, boolean>> {
-  const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+  const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : userType === "agent_livreur" ? "agents_livreur" : "commerciaux";
   const { data } = await supabase.from(table).select("permissions").eq("id", userId).maybeSingle();
   return normalizePermissions(data?.permissions, userType);
 }
@@ -489,10 +501,33 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       return await failLogin();
     }
+    // Try agent livreur
+    const { data: agent } = await supabase.from("agents_livreur").select("*").eq("identifiant", normalizedLogin).maybeSingle();
+    if (agent) {
+      if (await checkPassword(password, agent.password_hash, "agents_livreur", agent.id)) {
+        if (!agent.active) return jsonError(403, "Ce compte est désactivé. Contactez votre administrateur.");
+        await clearLoginFailures(rateKey, clientIp);
+        if (requestedTeamId && agent.team_id && requestedTeamId !== agent.team_id) {
+          return jsonError(403, "Vous n'êtes pas autorisé à accéder à cet espace.");
+        }
+        const permissions = normalizePermissions(agent.permissions, "agent_livreur");
+        const token = await createSession("agent_livreur", agent.id, agent.full_name, permissions, agent.team_id);
+        let teamCode: string | null = null;
+        let teamColor: string | null = null;
+        if (agent.team_id) {
+          const { data: teamData } = await supabase.from("teams").select("code, color").eq("id", agent.team_id).maybeSingle();
+          teamCode = teamData?.code ?? null;
+          teamColor = teamData?.color ?? null;
+        }
+        return jsonResponse({
+          token, userType: "agent_livreur", fullName: agent.full_name, userId: agent.id,
+          mustChangePassword: agent.must_change_password ?? false, permissions, teamId: agent.team_id, role: "agent_livreur", teamCode, teamColor,
+        });
+      }
+      return await failLogin();
+    }
     return await failLogin();
   }
-
-  if (path === "/logout" && method === "POST") {
     const token = getBearerToken(req);
     if (token) await supabase.from("sessions").delete().eq("token", token);
     return jsonResponse({ success: true });
@@ -512,7 +547,7 @@ async function handleRoute(req: Request): Promise<Response> {
       role = adminData?.role || "admin";
       mustChangePassword = adminData?.must_change_password ?? false;
     } else {
-      const userTable = session.user_type === "superviseur" ? "superviseurs" : "commerciaux";
+      const userTable = session.user_type === "superviseur" ? "superviseurs" : session.user_type === "agent_livreur" ? "agents_livreur" : "commerciaux";
       const { data: userData } = await supabase.from(userTable).select("must_change_password").eq("id", session.user_id).maybeSingle();
       mustChangePassword = userData?.must_change_password ?? false;
     }
@@ -557,7 +592,7 @@ async function handleRoute(req: Request): Promise<Response> {
   const session = await getSession(token);
   if (!session) return jsonError(401, "Session expirée");
 
-  const userTable = session.user_type === "admin" ? "admins" : session.user_type === "superviseur" ? "superviseurs" : "commerciaux";
+  const userTable = session.user_type === "admin" ? "admins" : session.user_type === "superviseur" ? "superviseurs" : session.user_type === "agent_livreur" ? "agents_livreur" : "commerciaux";
   if (path === "/change-password" && method === "POST") {
     const { newPassword } = await req.json();
     if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
@@ -1176,7 +1211,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const userType = url.searchParams.get("type") as UserType | null;
       const userId = url.searchParams.get("id");
       if (!userType || !userId) return jsonError(400, "Type et id requis");
-      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : userType === "agent_livreur" ? "agents_livreur" : "commerciaux";
       if (userType === "admin" && adminRole !== "super_admin") {
         return jsonError(403, "Seul le super administrateur peut gérer les permissions des administrateurs");
       }
@@ -1189,7 +1224,7 @@ async function handleRoute(req: Request): Promise<Response> {
       { const denied = requireAnyAdminPermission("manage_admins"); if (denied) return denied; }
       const { userType, userId, permissions } = await req.json();
       if (!userType || !userId) return jsonError(400, "Type et id requis");
-      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : "commerciaux";
+      const table = userType === "admin" ? "admins" : userType === "superviseur" ? "superviseurs" : userType === "agent_livreur" ? "agents_livreur" : "commerciaux";
       if (userType === "admin" && adminRole !== "super_admin") {
         return jsonError(403, "Seul le super administrateur peut gérer les permissions des administrateurs");
       }
@@ -1222,9 +1257,148 @@ async function handleRoute(req: Request): Promise<Response> {
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse({ data, count: count || 0, page, pageSize });
     }
-  }
 
-  // ===== SHARED FIELD ROUTES (commercial + superviseur) =====
+    // --- AGENTS LIVREUR CRUD (admin) ---
+    if (path === "/agents-livreur" && method === "GET") {
+      { const denied = requireAnyAdminPermission("manage_agents_livreur"); if (denied) return denied; }
+      let query = supabase
+        .from("agents_livreur")
+        .select("id, identifiant, full_name, active, telephone, team_id, permissions, created_at, updated_at")
+        .order("created_at", { ascending: false });
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { data: agents, error } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      // Fetch associated commerciaux for each agent
+      const agentIds = (agents || []).map((a: Record<string, unknown>) => a.id);
+      let assocData: Record<string, unknown>[] = [];
+      if (agentIds.length > 0) {
+        let assocQuery = supabase
+          .from("commercial_agent_livreur")
+          .select("agent_livreur_id, commercial_id, commerciaux:commerciaux(id, full_name, identifiant)")
+          .in("agent_livreur_id", agentIds);
+        if (effectiveTeamId) assocQuery = assocQuery.eq("team_id", effectiveTeamId);
+        const { data: assocs } = await assocQuery;
+        assocData = assocs || [];
+      }
+      const enriched = (agents || []).map((a: Record<string, unknown>) => {
+        const commerciaux = assocData
+          .filter((r: Record<string, unknown>) => r.agent_livreur_id === a.id)
+          .map((r: Record<string, unknown>) => r.commerciaux)
+          .filter(Boolean);
+        return { ...a, commerciaux };
+      });
+      return jsonResponse(enriched);
+    }
+    if (path === "/agents-livreur" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_agents_livreur"); if (denied) return denied; }
+      const { identifiant, full_name, password, telephone, commercial_ids } = await req.json();
+      if (!identifiant || !full_name || !password) return jsonError(400, "Identifiant, nom et mot de passe requis");
+      if (password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
+      const password_hash = await hashPassword(password);
+      const insertData: Record<string, unknown> = {
+        identifiant: identifiant.trim(), full_name: full_name.trim(),
+        password_hash, telephone: telephone?.trim() || null,
+        permissions: DEFAULT_AGENT_LIVREUR_PERMS,
+      };
+      if (effectiveTeamId) insertData.team_id = effectiveTeamId;
+      const { data: agent, error } = await supabase.from("agents_livreur").insert(insertData).select("id, identifiant, full_name, active, telephone, team_id, permissions, created_at").maybeSingle();
+      if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la création"); }
+      // Associate commerciaux
+      if (Array.isArray(commercial_ids) && commercial_ids.length > 0 && agent) {
+        const assocRows = commercial_ids.map((cid: string) => ({
+          commercial_id: cid, agent_livreur_id: agent.id,
+          ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}),
+        }));
+        await supabase.from("commercial_agent_livreur").insert(assocRows);
+      }
+      return jsonResponse(agent, 201);
+    }
+    if (path.startsWith("/agents-livreur/") && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_agents_livreur"); if (denied) return denied; }
+      const id = path.split("/")[2];
+      const body = await req.json();
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (body.full_name !== undefined) updates.full_name = body.full_name.trim();
+      if (body.telephone !== undefined) updates.telephone = body.telephone?.trim() || null;
+      if (body.active !== undefined) updates.active = !!body.active;
+      let query = supabase.from("agents_livreur").update(updates).eq("id", id);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { data, error } = await query.select("id, identifiant, full_name, active, telephone, team_id, permissions, created_at, updated_at").maybeSingle();
+      if (error) return jsonError(500, "Erreur lors de la modification");
+      if (!data) return jsonError(404, "Agent livreur introuvable");
+      // Update associations if provided
+      if (Array.isArray(body.commercial_ids)) {
+        await supabase.from("commercial_agent_livreur").delete().eq("agent_livreur_id", id);
+        if (body.commercial_ids.length > 0) {
+          const assocRows = body.commercial_ids.map((cid: string) => ({
+            commercial_id: cid, agent_livreur_id: id,
+            ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}),
+          }));
+          await supabase.from("commercial_agent_livreur").insert(assocRows);
+        }
+      }
+      return jsonResponse(data);
+    }
+    if (path.startsWith("/agents-livreur/") && path.endsWith("/reset-password") && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_agents_livreur"); if (denied) return denied; }
+      const id = path.split("/")[2];
+      const { password } = await req.json();
+      if (!password || password.length < MIN_PASSWORD_LENGTH) return jsonError(400, PASSWORD_RULE_MESSAGE);
+      const password_hash = await hashPassword(password);
+      let query = supabase.from("agents_livreur").update({ password_hash, must_change_password: true }).eq("id", id);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { error } = await query;
+      if (error) return jsonError(500, "Erreur lors de la réinitialisation");
+      return jsonResponse({ success: true });
+    }
+    if (path.startsWith("/agents-livreur/") && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_agents_livreur"); if (denied) return denied; }
+      const id = path.split("/")[2];
+      let query = supabase.from("agents_livreur").delete().eq("id", id);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { error } = await query;
+      if (error) return jsonError(500, "Erreur lors de la suppression");
+      return jsonResponse({ success: true });
+    }
+
+    // --- ADMIN: LIST COMMANDES ---
+    if (path === "/commandes" && method === "GET") {
+      let query = supabase
+        .from("commandes")
+        .select(`id, code, point_vente_id, commercial_id, agent_livreur_id, secteur_id, team_id, statut, date_commande, date_livraison, agent_validation_at, observation, created_at, updated_at,
+          commercial:commerciaux(full_name), agent_livreur:agents_livreur(full_name), point_vente:points_vente(name, city, address, latitude, longitude),
+          lignes:commande_lignes(produit_id, produit_nom, quantite, unite, observation)`, { count: "exact" })
+        .order("created_at", { ascending: false });
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { data, error, count } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse({ data, count: count || 0 });
+    }
+
+    // --- ADMIN: UPDATE COMMANDE STATUT ---
+    if (path.startsWith("/commandes/") && path.endsWith("/statut") && method === "PUT") {
+      const id = path.split("/")[2];
+      const { statut } = await req.json();
+      const validStatuses = ["enregistree", "en_attente_livraison", "en_cours_livraison", "livree", "annulee", "non_livree"];
+      if (!validStatuses.includes(statut)) return jsonError(400, "Statut invalide");
+      let existingQuery = supabase.from("commandes").select("id, statut").eq("id", id);
+      if (effectiveTeamId) existingQuery = existingQuery.eq("team_id", effectiveTeamId);
+      const { data: existing } = await existingQuery.maybeSingle();
+      if (!existing) return jsonError(404, "Commande introuvable");
+      const updates: Record<string, unknown> = { statut, updated_at: new Date().toISOString() };
+      if (statut === "livree") { updates.date_livraison = new Date().toISOString(); updates.agent_validation_at = new Date().toISOString(); }
+      let query = supabase.from("commandes").update(updates).eq("id", id);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { error } = await query;
+      if (error) return jsonError(500, "Erreur lors de la mise à jour");
+      await supabase.from("commande_status_history").insert({
+        commande_id: id, ancien_statut: existing.statut, nouveau_statut: statut,
+        modifie_par: session.full_name, user_role: "admin",
+        ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}),
+      });
+      return jsonResponse({ success: true });
+    }
+  }
   if (session.user_type === "commercial" || session.user_type === "superviseur") {
     const userId = session.user_id;
     const userRole = session.user_type as "commercial" | "superviseur";
@@ -1519,6 +1693,90 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(data);
     }
 
+    // --- SEARCH POINTS DE VENTE ---
+    if (path === "/search-points-vente" && method === "GET") {
+      const denied = requirePermission("search_point_vente"); if (denied) return denied;
+      const q = (url.searchParams.get("q") || "").trim();
+      if (!q || q.length < 2) return jsonResponse([]);
+      let query = supabase
+        .from("points_vente")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs(nom)")
+        .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
+        .limit(20);
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query;
+      if (error) return jsonError(500, "Erreur de recherche");
+      return jsonResponse(data);
+    }
+
+    // --- CREATE COMMANDE (commercial) ---
+    if (path === "/commandes" && method === "POST" && userRole === "commercial") {
+      const { point_vente_id, lignes, observation } = await req.json();
+      if (!point_vente_id || !Array.isArray(lignes) || lignes.length === 0)
+        return jsonError(400, "Point de vente et au moins une ligne de produit requis");
+      for (const l of lignes) {
+        if (!l.produit_nom || typeof l.produit_nom !== "string" || !l.produit_nom.trim())
+          return jsonError(400, "Chaque ligne doit avoir un nom de produit");
+        if (!Number.isFinite(Number(l.quantite)) || Number(l.quantite) <= 0)
+          return jsonError(400, "La quantité doit être supérieure à zéro");
+      }
+      // Verify point de vente belongs to user's team
+      let pvQuery = supabase.from("points_vente").select("id, secteur_id").eq("id", point_vente_id);
+      if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
+      const { data: pv, error: pvError } = await pvQuery.maybeSingle();
+      if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
+      const code = "CMD-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+      const secteur_id = pv.secteur_id || (await getCommercialSecteur(userId, userTeamId)).secteur_id;
+      // Find associated agent livreur(s)
+      let agentQuery = supabase
+        .from("commercial_agent_livreur")
+        .select("agent_livreur_id")
+        .eq("commercial_id", userId);
+      if (userTeamId) agentQuery = agentQuery.eq("team_id", userTeamId);
+      const { data: agentAssocs } = await agentQuery;
+      const agent_livreur_id = agentAssocs && agentAssocs.length > 0 ? agentAssocs[0].agent_livreur_id : null;
+      const cmdInsert: Record<string, unknown> = {
+        code, point_vente_id, commercial_id: userId,
+        agent_livreur_id, secteur_id,
+        statut: "enregistree", observation: observation?.trim() || null,
+      };
+      if (userTeamId) cmdInsert.team_id = userTeamId;
+      const { data: cmd, error: cmdError } = await supabase.from("commandes").insert(cmdInsert).select("id, code, created_at").maybeSingle();
+      if (cmdError) { if (cmdError.code === "23505") return jsonError(409, "Code commande déjà existant"); return jsonError(500, "Erreur lors de la création de la commande"); }
+      const lignesData = lignes.map((l: Record<string, unknown>) => ({
+        commande_id: cmd!.id,
+        produit_id: l.produit_id || null,
+        produit_nom: String(l.produit_nom).trim(),
+        quantite: Number(l.quantite) || 1,
+        unite: l.unite || "unité",
+        observation: l.observation?.trim() || null,
+        ...(userTeamId ? { team_id: userTeamId } : {}),
+      }));
+      const { error: lignesError } = await supabase.from("commande_lignes").insert(lignesData);
+      if (lignesError) return jsonError(500, "Erreur lors de l'enregistrement des lignes");
+      await supabase.from("commande_status_history").insert({
+        commande_id: cmd!.id, ancien_statut: null, nouveau_statut: "enregistree",
+        modifie_par: session.full_name, user_role: "commercial",
+        ...(userTeamId ? { team_id: userTeamId } : {}),
+      });
+      return jsonResponse({ id: cmd!.id, code: cmd!.code, created_at: cmd!.created_at }, 201);
+    }
+
+    // --- MY COMMANDES (commercial) ---
+    if (path === "/mes-commandes" && method === "GET" && userRole === "commercial") {
+      let query = supabase
+        .from("commandes")
+        .select(`id, code, point_vente_id, statut, date_commande, date_livraison, observation, created_at,
+          point_vente:points_vente(name, city, address, latitude, longitude),
+          lignes:commande_lignes(produit_id, produit_nom, quantite, unite, observation)`)
+        .eq("commercial_id", userId)
+        .order("created_at", { ascending: false });
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(data);
+    }
+
     // --- SECTEURS LIST (only the field user's assigned tournées) ---
     if (path === "/secteurs" && method === "GET") {
       const denied = requirePermission("create_point_vente");
@@ -1640,6 +1898,122 @@ async function handleRoute(req: Request): Promise<Response> {
         visit: { id: visit.id, visited_at: visit.visited_at, distance_meters: visit.distance_meters, status: visit.status, vente_status: null },
         pointName: pv.name,
       });
+    }
+  }
+
+  // ===== AGENT LIVREUR ROUTES =====
+  if (session.user_type === "agent_livreur") {
+    const userId = session.user_id;
+    const userTeamId = session.team_id;
+
+    // --- LIST COMMANDES TO DELIVER ---
+    if (path === "/mes-commandes-livraison" && method === "GET") {
+      const denied = requirePermission("view_commandes_livraison"); if (denied) return denied;
+      let query = supabase
+        .from("commandes")
+        .select(`id, code, point_vente_id, commercial_id, agent_livreur_id, statut, date_commande, date_livraison, agent_validation_at, observation, created_at,
+          commercial:commerciaux(full_name),
+          point_vente:points_vente(name, city, address, latitude, longitude),
+          lignes:commande_lignes(produit_id, produit_nom, quantite, unite, observation)`)
+        .eq("agent_livreur_id", userId)
+        .order("created_at", { ascending: false });
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(data);
+    }
+
+    // --- COMMANDE DETAIL ---
+    if (path.startsWith("/commandes/") && method === "GET") {
+      const denied = requirePermission("view_commande_detail"); if (denied) return denied;
+      const id = path.split("/")[2];
+      let query = supabase
+        .from("commandes")
+        .select(`id, code, point_vente_id, commercial_id, agent_livreur_id, statut, date_commande, date_livraison, agent_validation_at, observation, created_at, updated_at,
+          commercial:commerciaux(full_name),
+          point_vente:points_vente(name, city, address, latitude, longitude),
+          lignes:commande_lignes(produit_id, produit_nom, quantite, unite, observation),
+          history:commande_status_history(ancien_statut, nouveau_statut, modifie_par, user_role, created_at)`)
+        .eq("id", id)
+        .eq("agent_livreur_id", userId);
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query.maybeSingle();
+      if (error) return jsonError(500, "Erreur de lecture");
+      if (!data) return jsonError(404, "Commande introuvable");
+      return jsonResponse(data);
+    }
+
+    // --- VALIDATE LIVRAISON ---
+    if (path.startsWith("/commandes/") && path.endsWith("/valider-livraison") && method === "POST") {
+      const denied = requirePermission("validate_livraison"); if (denied) return denied;
+      const id = path.split("/")[2];
+      const { statut, commentaire } = await req.json();
+      const validStatuses = ["livree", "non_livree"];
+      if (!validStatuses.includes(statut)) return jsonError(400, "Statut invalide. Utilisez 'livree' ou 'non_livree'.");
+      let existingQuery = supabase
+        .from("commandes")
+        .select("id, statut, point_vente_id, commercial_id, agent_livreur_id")
+        .eq("id", id)
+        .eq("agent_livreur_id", userId);
+      if (userTeamId) existingQuery = existingQuery.eq("team_id", userTeamId);
+      const { data: existing, error: existError } = await existingQuery.maybeSingle();
+      if (existError || !existing) return jsonError(404, "Commande introuvable");
+      if (existing.statut === "livree" || existing.statut === "annulee") return jsonError(409, "Cette commande a déjà été traitée.");
+      const now = new Date().toISOString();
+      const updates: Record<string, unknown> = {
+        statut, updated_at: now, agent_validation_at: now,
+        ...(statut === "livree" ? { date_livraison: now } : {}),
+      };
+      const { error: updateError } = await supabase.from("commandes").update(updates).eq("id", id);
+      if (updateError) return jsonError(500, "Erreur lors de la validation");
+      // Create livraison traceability record
+      await supabase.from("livraisons").insert({
+        commande_id: id, agent_livreur_id: userId,
+        point_vente_id: existing.point_vente_id, commercial_id: existing.commercial_id,
+        statut_final: statut, date_livraison: now,
+        commentaire: commentaire?.trim() || null,
+        ...(userTeamId ? { team_id: userTeamId } : {}),
+      });
+      // Record status history
+      await supabase.from("commande_status_history").insert({
+        commande_id: id, ancien_statut: existing.statut, nouveau_statut: statut,
+        modifie_par: session.full_name, user_role: "agent_livreur",
+        ...(userTeamId ? { team_id: userTeamId } : {}),
+      });
+      return jsonResponse({ success: true, statut, date_livraison: statut === "livree" ? now : null });
+    }
+
+    // --- HISTORIQUE LIVRAISONS ---
+    if (path === "/historique-livraisons" && method === "GET") {
+      const denied = requirePermission("view_historique_livraisons"); if (denied) return denied;
+      let query = supabase
+        .from("livraisons")
+        .select(`id, commande_id, statut_final, date_livraison, commentaire, created_at,
+          commande:commandes(code),
+          point_vente:points_vente(name, city, address),
+          commercial:commerciaux(full_name)`)
+        .eq("agent_livreur_id", userId)
+        .order("date_livraison", { ascending: false });
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query;
+      if (error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(data);
+    }
+
+    // --- SEARCH POINTS DE VENTE (agent livreur) ---
+    if (path === "/search-points-vente" && method === "GET") {
+      const denied = requirePermission("search_point_vente"); if (denied) return denied;
+      const q = (url.searchParams.get("q") || "").trim();
+      if (!q || q.length < 2) return jsonResponse([]);
+      let query = supabase
+        .from("points_vente")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs(nom)")
+        .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
+        .limit(20);
+      if (userTeamId) query = query.eq("team_id", userTeamId);
+      const { data, error } = await query;
+      if (error) return jsonError(500, "Erreur de recherche");
+      return jsonResponse(data);
     }
   }
 

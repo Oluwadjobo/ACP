@@ -366,4 +366,65 @@ export const api = {
   myControles: () => apiRequest<import("@/types").ControleTerrain[]>("/mes-controles", { method: "GET" }),
 
   myBonsLivraison: () => apiRequest<import("@/types").BonLivraison[]>("/mes-bons-livraison", { method: "GET" }),
+
+  // Admin - Agents Livreur
+  listAgentsLivreur: () => apiRequest<import("@/types").AgentLivreur[]>("/agents-livreur", { method: "GET" }),
+
+  createAgentLivreur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; commercial_ids?: string[] }) =>
+    apiRequest<import("@/types").AgentLivreur>("/agents-livreur", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAgentLivreur: (id: string, body: Partial<{ full_name: string; active: boolean; telephone: string; commercial_ids: string[] }>) =>
+    apiRequest<import("@/types").AgentLivreur>(`/agents-livreur/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetAgentLivreurPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/agents-livreur/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteAgentLivreur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/agents-livreur/${id}`, { method: "DELETE" }),
+
+  // Admin - Commandes
+  listCommandes: () =>
+    apiRequest<{ data: import("@/types").Commande[]; count: number }>("/commandes", { method: "GET" }),
+
+  updateCommandeStatut: (id: string, statut: string) =>
+    apiRequest<{ success: boolean }>(`/commandes/${id}/statut`, {
+      method: "PUT",
+      body: JSON.stringify({ statut }),
+    }),
+
+  // Field - Search PDV
+  searchPointsVente: (q: string) =>
+    apiRequest<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; telephone?: string; secteur_id?: string; secteur?: { nom: string } | null }[]>(`/search-points-vente?q=${encodeURIComponent(q)}`, { method: "GET" }),
+
+  // Commercial - Commandes
+  createCommande: (body: { point_vente_id: string; lignes: { produit_id?: string; produit_nom: string; quantite: number; unite?: string; observation?: string }[]; observation?: string }) =>
+    apiRequest<{ id: string; code: string; created_at: string }>("/commandes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  myCommandes: () => apiRequest<import("@/types").Commande[]>("/mes-commandes", { method: "GET" }),
+
+  // Agent Livreur
+  listMesCommandesLivraison: () => apiRequest<import("@/types").Commande[]>("/mes-commandes-livraison", { method: "GET" }),
+
+  getCommandeDetail: (id: string) => apiRequest<import("@/types").Commande & { history: { ancien_statut: string | null; nouveau_statut: string; modifie_par: string; user_role: string; created_at: string }[] }>(`/commandes/${id}`, { method: "GET" }),
+
+  validerLivraison: (id: string, statut: string, commentaire?: string) =>
+    apiRequest<{ success: boolean; statut: string; date_livraison: string | null }>(`/commandes/${id}/valider-livraison`, {
+      method: "POST",
+      body: JSON.stringify({ statut, commentaire }),
+    }),
+
+  listHistoriqueLivraisons: () =>
+    apiRequest<{ id: string; commande_id: string; statut_final: string; date_livraison: string; commentaire: string | null; created_at: string; commande?: { code: string }; point_vente?: { name: string; city: string; address: string }; commercial?: { full_name: string } }[]>("/historique-livraisons", { method: "GET" }),
 };

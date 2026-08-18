@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, LocateFixed, Navigation } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, LocateFixed, Navigation, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
 import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
@@ -300,6 +300,9 @@ export function FieldScanner() {
             )}
             {hasPermission("create_point_vente") && (
               <button onClick={() => setShowCreateModal(true)} className="btn-secondary w-full mt-3"><Store size={18} /> Créer un point de vente</button>
+            )}
+            {hasPermission("search_point_vente") && (
+              <button onClick={() => navigate(`${userType === "superviseur" ? "/superviseur" : "/commercial"}/recherche`)} className="btn-secondary w-full mt-3"><Search size={18} /> Rechercher un point de vente</button>
             )}
           </div>
         )}

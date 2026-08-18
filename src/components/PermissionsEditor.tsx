@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { Shield, Loader2, Check } from "lucide-react";
 import { api } from "@/lib/api";
-import { FIELD_PERMISSIONS, DASHBOARD_PERMISSIONS, PERMISSION_LABELS, type Permission, type Permissions } from "@/types";
+import { FIELD_PERMISSIONS, AGENT_LIVREUR_PERMISSIONS, DASHBOARD_PERMISSIONS, PERMISSION_LABELS, type Permission, type Permissions } from "@/types";
 
 interface Props {
-  userType: "admin" | "commercial" | "superviseur";
+  userType: "admin" | "commercial" | "superviseur" | "agent_livreur";
   userId: string;
   userLabel: string;
 }
@@ -75,7 +75,8 @@ export function PermissionsEditor({ userType, userId, userLabel }: Props) {
         Permissions de {userLabel}
       </div>
       {renderGroup("Terrain", FIELD_PERMISSIONS)}
-      {renderGroup("Tableau de bord", DASHBOARD_PERMISSIONS)}
+      {userType === "agent_livreur" && renderGroup("Agent livreur", AGENT_LIVREUR_PERMISSIONS)}
+      {userType === "admin" && renderGroup("Tableau de bord", DASHBOARD_PERMISSIONS)}
       {error && <p className="text-sm text-error-600">{error}</p>}
       <div className="flex items-center gap-3 pt-2">
         <button onClick={save} disabled={saving} className="btn-primary text-sm py-2">

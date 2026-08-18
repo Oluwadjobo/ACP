@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TeamSelectionPage } from "@/pages/TeamSelectionPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
@@ -13,16 +14,22 @@ import { AdminPointsVente } from "@/pages/admin/AdminPointsVente";
 import { AdminCarte } from "@/pages/admin/AdminCarte";
 import { AdminSecteurs } from "@/pages/admin/AdminSecteurs";
 import { AdminBonsLivraison } from "@/pages/admin/AdminBonsLivraison";
+import { AdminAgentsLivreur } from "@/pages/admin/AdminAgentsLivreur";
+import { AdminCommandes } from "@/pages/admin/AdminCommandes";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
 import { SuperviseurControleTerrain } from "@/pages/superviseur/SuperviseurControleTerrain";
+import { AgentLivreurCommandes } from "@/pages/agent_livreur/AgentLivreurCommandes";
+import { AgentLivreurHistorique } from "@/pages/agent_livreur/AgentLivreurHistorique";
+import { PointVenteSearch } from "@/pages/shared/PointVenteSearch";
 import { ShieldAlert } from "lucide-react";
 import type { UserType, Permission } from "@/types";
 
 const fieldHome: Record<string, string> = {
   commercial: "/commercial",
   superviseur: "/superviseur",
+  agent_livreur: "/agent-livreur",
 };
 
 function LoadingScreen() {
@@ -69,10 +76,17 @@ function RootRedirect() {
   if (token && userType) {
     if (mustChangePassword) return <ChangePasswordPage />;
     if (userType === "admin") return <Navigate to="/admin" replace />;
+    if (userType === "agent_livreur") {
+      if (hasPermission("view_commandes_livraison")) return <Navigate to="/agent-livreur" replace />;
+      if (hasPermission("view_historique_livraisons")) return <Navigate to="/agent-livreur/historique" replace />;
+      if (hasPermission("search_point_vente")) return <Navigate to="/agent-livreur/recherche" replace />;
+      return <NoAccessPage />;
+    }
     if (hasPermission("scan")) return <Navigate to={fieldHome[userType] || "/"} replace />;
     if (hasPermission("view_history")) return <Navigate to={`${fieldHome[userType] || ""}/historique`} replace />;
     if (userType === "superviseur" && hasPermission("view_ventes_non_realisees")) return <Navigate to="/superviseur/ventes-non-realisees" replace />;
     if (userType === "superviseur" && hasPermission("control_terrain")) return <Navigate to="/superviseur/controle-terrain" replace />;
+    if (hasPermission("search_point_vente")) return <Navigate to={`${fieldHome[userType] || ""}/recherche`} replace />;
     return <NoAccessPage />;
   }
   return <TeamSelectionPage />;
@@ -104,6 +118,19 @@ function AppRoutes() {
       <Route path="/superviseur/historique" element={<ProtectedRoute allow="superviseur" permission="view_history"><FieldHistory /></ProtectedRoute>} />
       <Route path="/superviseur/ventes-non-realisees" element={<ProtectedRoute allow="superviseur" permission="view_ventes_non_realisees"><SuperviseurVentesNonRealisees /></ProtectedRoute>} />
       <Route path="/superviseur/controle-terrain" element={<ProtectedRoute allow="superviseur" permission="control_terrain"><SuperviseurControleTerrain /></ProtectedRoute>} />
+      <Route path="/superviseur/recherche" element={<ProtectedRoute allow="superviseur" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+
+      {/* Commercial routes - search */}
+      <Route path="/commercial/recherche" element={<ProtectedRoute allow="commercial" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+
+      {/* Agent livreur routes */}
+      <Route path="/agent-livreur" element={<ProtectedRoute allow="agent_livreur" permission="view_commandes_livraison"><AgentLivreurCommandes /></ProtectedRoute>} />
+      <Route path="/agent-livreur/historique" element={<ProtectedRoute allow="agent_livreur" permission="view_historique_livraisons"><AgentLivreurHistorique /></ProtectedRoute>} />
+      <Route path="/agent-livreur/recherche" element={<ProtectedRoute allow="agent_livreur" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+
+      {/* Admin - agent livreur management */}
+      <Route path="/admin/agents-livreur" element={<ProtectedRoute allow="admin" permission="manage_agents_livreur"><AdminLayout><AdminAgentsLivreur /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/commandes" element={<ProtectedRoute allow="admin" permission="view_dashboard"><AdminLayout><AdminCommandes /></AdminLayout></ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -112,11 +139,13 @@ function AppRoutes() {
 
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

@@ -1,4 +1,4 @@
-export type UserType = "admin" | "commercial" | "superviseur";
+export type UserType = "admin" | "commercial" | "superviseur" | "agent_livreur";
 
 export type AdminRole = "super_admin" | "admin";
 
@@ -18,7 +18,11 @@ export type Permission =
   | "view_dashboard" | "view_carte" | "manage_secteurs" | "manage_commerciaux"
   | "manage_superviseurs" | "manage_admins" | "manage_produits" | "manage_points_vente"
   | "manage_bons_livraison" | "view_visites" | "view_ventes" | "view_controles"
-  | "use_geolocation";
+  | "use_geolocation"
+  | "search_point_vente" | "navigate_to_point_vente"
+  | "manage_agents_livreur"
+  | "view_commandes_livraison" | "view_commande_detail" | "validate_livraison"
+  | "view_historique_livraisons";
 
 export type Permissions = Record<Permission, boolean>;
 
@@ -26,12 +30,20 @@ export const FIELD_PERMISSIONS: Permission[] = [
   "scan", "create_point_vente", "record_vente", "create_promesse",
   "control_terrain", "view_history", "view_ventes_non_realisees",
   "use_geolocation",
+  "search_point_vente", "navigate_to_point_vente",
+];
+
+export const AGENT_LIVREUR_PERMISSIONS: Permission[] = [
+  "view_commandes_livraison", "view_commande_detail", "validate_livraison",
+  "view_historique_livraisons",
+  "search_point_vente", "navigate_to_point_vente",
 ];
 
 export const DASHBOARD_PERMISSIONS: Permission[] = [
   "view_dashboard", "view_carte", "manage_secteurs", "manage_commerciaux",
   "manage_superviseurs", "manage_admins", "manage_produits", "manage_points_vente",
   "manage_bons_livraison", "view_visites", "view_ventes", "view_controles",
+  "manage_agents_livreur",
 ];
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
@@ -55,6 +67,13 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   view_ventes: "Voir les ventes",
   view_controles: "Voir les contrôles",
   use_geolocation: "Géolocalisation (sans caméra)",
+  search_point_vente: "Rechercher un point de vente",
+  navigate_to_point_vente: "Itinéraire vers un point de vente",
+  manage_agents_livreur: "Gérer les agents livreurs",
+  view_commandes_livraison: "Voir les commandes à livrer",
+  view_commande_detail: "Voir le détail d'une commande",
+  validate_livraison: "Valider une livraison",
+  view_historique_livraisons: "Voir l'historique des livraisons",
 };
 
 export interface Session {
@@ -64,6 +83,52 @@ export interface Session {
   userId: string;
   teamId: string | null;
   role: AdminRole | UserType;
+}
+
+export interface AgentLivreur {
+  id: string;
+  identifiant: string;
+  full_name: string;
+  active: boolean;
+  telephone?: string | null;
+  team_id?: string | null;
+  permissions?: Permissions;
+  commerciaux?: { id: string; full_name: string; identifiant: string }[];
+  created_at: string;
+  updated_at?: string;
+}
+
+export type CommandeStatut =
+  | "enregistree" | "en_attente_livraison" | "en_cours_livraison"
+  | "livree" | "annulee" | "non_livree";
+
+export interface CommandeLigne {
+  produit_id: string | null;
+  produit_nom: string;
+  quantite: number;
+  unite?: string;
+  observation?: string;
+}
+
+export interface Commande {
+  id: string;
+  code: string;
+  point_vente_id: string;
+  commercial_id: string | null;
+  agent_livreur_id: string | null;
+  secteur_id: string | null;
+  team_id?: string | null;
+  statut: CommandeStatut;
+  date_commande: string;
+  date_livraison: string | null;
+  agent_validation_at: string | null;
+  observation: string | null;
+  created_at: string;
+  updated_at?: string;
+  lignes?: CommandeLigne[];
+  commercial?: { full_name: string } | null;
+  agent_livreur?: { full_name: string } | null;
+  point_vente?: { name: string; city: string; address: string; latitude: number; longitude: number } | null;
 }
 
 export interface Secteur {
