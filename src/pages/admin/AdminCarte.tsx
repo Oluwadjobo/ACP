@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers, ChevronDown, ChevronUp } from "lucide-react";
+import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers, ChevronDown, ChevronUp, Navigation } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
@@ -165,7 +165,7 @@ export function AdminCarte() {
         : createPinIcon(color);
       const marker = L.marker([p.latitude, p.longitude], { icon, zIndexOffset: isSelected ? 1000 : 0 })
         .bindPopup(
-          `<div style="font-family:system-ui;padding:4px 2px;min-width:160px;">
+          `<div style="font-family:system-ui;padding:4px 2px;min-width:180px;">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
               <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;"></span>
               <strong style="font-size:14px;color:#1f2937;">${p.name}</strong>
@@ -173,6 +173,7 @@ export function AdminCarte() {
             <span style="font-size:12px;color:#6b7280;">${p.address}</span><br/>
             <span style="font-size:12px;color:#6b7280;">${p.city}</span><br/>
             <span style="font-size:11px;color:#9ca3af;">Code : ${p.code}</span>${p.secteur_nom ? `<br/><span style="font-size:11px;font-weight:600;color:${color};">Tournée : ${p.secteur_nom}</span>` : ""}
+            <a href="https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#0d1b5e;color:#fff;font-size:12px;font-weight:600;text-decoration:none;">📍 Y aller</a>
           </div>`
         );
       marker.on("click", () => setSelected(p));

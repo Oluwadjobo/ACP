@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users, Shield } from "lucide-react";
+import { UserPlus, Search, Pencil, KeyRound, Trash2, UserCheck, UserX, Users, Shield, Download } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Commercial, Secteur, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
@@ -37,6 +37,27 @@ export function AdminCommerciaux() {
       c.identifiant.toLowerCase().includes(search.toLowerCase())
   );
 
+  const exportCsv = () => {
+    const headers = ["Nom complet", "Identifiant", "Telephone", "Statut", "Team Leader", "Tournees", "Date creation"];
+    const rows = filtered.map((c) => [
+      c.full_name,
+      c.identifiant,
+      c.telephone || "",
+      c.active ? "Actif" : "Desactive",
+      c.superviseur_nom || "",
+      (c.tournees?.map((t) => t.nom).join("; ")) || "",
+      formatDate(c.created_at),
+    ]);
+    const csv = [headers, ...rows]
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `commerciaux_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       {toast && (
@@ -52,13 +73,19 @@ export function AdminCommerciaux() {
           <h1 className="text-2xl font-bold text-gray-900">Commerciaux</h1>
           <p className="text-gray-500 text-sm mt-1">Gérez les comptes de vos commerciaux terrain</p>
         </div>
-        <button
-          onClick={() => { setEditing(null); setModalOpen(true); }}
-          className="btn-primary"
-        >
-          <UserPlus size={18} />
-          Ajouter
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportCsv} className="btn-secondary" disabled={loading || filtered.length === 0}>
+            <Download size={18} />
+            Exporter
+          </button>
+          <button
+            onClick={() => { setEditing(null); setModalOpen(true); }}
+            className="btn-primary"
+          >
+            <UserPlus size={18} />
+            Ajouter
+          </button>
+        </div>
       </div>
 
       {/* Search */}

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
-import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation } from "lucide-react";
 import { api } from "@/lib/api";
 import type { PointVente, Secteur } from "@/types";
 import { Modal } from "@/components/Modal";
@@ -36,6 +36,34 @@ export function AdminPointsVente() {
       p.city.toLowerCase().includes(search.toLowerCase())
   );
 
+  const exportCsv = () => {
+    const headers = ["Code", "Nom", "Adresse", "Ville", "Latitude", "Longitude", "Tournee", "Date creation"];
+    const rows = filtered.map((p) => [
+      p.code,
+      p.name,
+      p.address,
+      p.city,
+      p.latitude.toString(),
+      p.longitude.toString(),
+      p.secteur_nom || "",
+      new Date(p.created_at).toLocaleDateString("fr-FR"),
+    ]);
+    const csv = [headers, ...rows]
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `points_vente_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  };
+
+  const openGoogleMaps = (lat: number, lon: number) => {
+    if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon)) return;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
+    window.open(url, "_blank");
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       {toast && (
@@ -51,10 +79,16 @@ export function AdminPointsVente() {
           <h1 className="text-2xl font-bold text-gray-900">Points de vente</h1>
           <p className="text-gray-500 text-sm mt-1">Gérez vos points de vente et leurs QR codes</p>
         </div>
-        <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary">
-          <Plus size={18} />
-          Ajouter
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportCsv} className="btn-secondary" disabled={loading || filtered.length === 0}>
+            <Download size={18} />
+            Exporter
+          </button>
+          <button onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary">
+            <Plus size={18} />
+            Ajouter
+          </button>
+        </div>
       </div>
 
       <div className="relative max-w-sm">
@@ -99,6 +133,9 @@ export function AdminPointsVente() {
                   <button onClick={() => setQrModal(p)} className="btn-secondary flex-1 text-xs py-2">
                     <QrCode size={14} />
                     QR Code
+                  </button>
+                  <button onClick={() => openGoogleMaps(p.latitude, p.longitude)} className="btn-ghost p-2 rounded-lg" title="Y aller - Itineraire">
+                    <Navigation size={16} className="text-primary-600" />
                   </button>
                   <button onClick={() => { setEditing(p); setModalOpen(true); }} className="btn-ghost p-2 rounded-lg" title="Modifier">
                     <Pencil size={16} />
