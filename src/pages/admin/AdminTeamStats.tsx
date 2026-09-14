@@ -65,6 +65,7 @@ export function AdminTeamStats() {
                 <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                   <th className="px-6 py-3 font-medium">Commercial</th>
                   <th className="px-4 py-3 font-medium text-center">Statut</th>
+                  <th className="px-4 py-3 font-medium text-center">PDV créés</th>
                   <th className="px-4 py-3 font-medium text-center">PDV visités</th>
                   <th className="px-4 py-3 font-medium text-center">Visites</th>
                   <th className="px-4 py-3 font-medium text-center">Ventes</th>
@@ -86,6 +87,7 @@ export function AdminTeamStats() {
                     <td className="px-4 py-4 text-center">
                       {c.active ? <UserCheck size={16} className="inline text-success-500" /> : <UserX size={16} className="inline text-gray-400" />}
                     </td>
+                    <td className="px-4 py-4 text-center font-semibold text-primary-700">{c.points_vente_crees}</td>
                     <td className="px-4 py-4 text-center font-semibold text-accent-700">{c.points_vente}</td>
                     <td className="px-4 py-4 text-center text-gray-700">{c.visites}</td>
                     <td className="px-4 py-4 text-center font-semibold text-success-600">{c.ventes}</td>
@@ -163,6 +165,7 @@ export function AdminTeamStats() {
                 <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                   <th className="px-6 py-3 font-medium">Team Leader</th>
                   <th className="px-4 py-3 font-medium text-center">Statut</th>
+                  <th className="px-4 py-3 font-medium text-center">PDV créés</th>
                   <th className="px-4 py-3 font-medium text-center">PDV visités</th>
                   <th className="px-4 py-3 font-medium text-center">Visites</th>
                   <th className="px-4 py-3 font-medium text-center">Ventes</th>
@@ -183,6 +186,7 @@ export function AdminTeamStats() {
                     <td className="px-4 py-4 text-center">
                       {s.active ? <UserCheck size={16} className="inline text-success-500" /> : <UserX size={16} className="inline text-gray-400" />}
                     </td>
+                    <td className="px-4 py-4 text-center font-semibold text-primary-700">{s.points_vente_crees}</td>
                     <td className="px-4 py-4 text-center font-semibold text-accent-700">{s.points_vente}</td>
                     <td className="px-4 py-4 text-center text-gray-700">{s.visites}</td>
                     <td className="px-4 py-4 text-center font-semibold text-success-600">{s.ventes}</td>

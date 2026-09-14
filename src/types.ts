@@ -355,6 +355,7 @@ export interface TeamStats {
     full_name: string;
     active: boolean;
     points_vente: number;
+    points_vente_crees: number;
     visites: number;
     ventes: number;
     ventes_non_realisees: number;
@@ -375,6 +376,7 @@ export interface TeamStats {
     full_name: string;
     active: boolean;
     points_vente: number;
+    points_vente_crees: number;
     visites: number;
     ventes: number;
     controles: number;

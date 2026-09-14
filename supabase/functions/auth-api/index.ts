@@ -1441,16 +1441,22 @@ async function handleRoute(req: Request): Promise<Response> {
       if (effectiveTeamId) ctrlQuery = ctrlQuery.eq("team_id", effectiveTeamId);
       const { data: controles } = await ctrlQuery;
 
+      let pvCreatedQuery = supabase.from("points_vente").select("id, created_by, created_by_role");
+      if (effectiveTeamId) pvCreatedQuery = pvCreatedQuery.eq("team_id", effectiveTeamId);
+      const { data: pvCreated } = await pvCreatedQuery;
+
       const commercialStats = (commerciaux || []).map((c: Record<string, unknown>) => {
         const cId = String(c.id);
         const cVisites = (visites || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
         const cVentes = (ventes || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
         const distinctPdv = new Set(cVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
+        const pdvCreated = (pvCreated || []).filter((p: Record<string, unknown>) => p.created_by === cId && p.created_by_role === "commercial").length;
         return {
           id: cId,
           full_name: String(c.full_name),
           active: !!c.active,
           points_vente: distinctPdv,
+          points_vente_crees: pdvCreated,
           visites: cVisites.length,
           ventes: cVentes.length,
           ventes_non_realisees: cVisites.filter((v: Record<string, unknown>) => v.vente_status === "vente_non_realisee").length,
@@ -1481,11 +1487,13 @@ async function handleRoute(req: Request): Promise<Response> {
         const sVentes = (ventes || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId);
         const sControles = (controles || []).filter((c: Record<string, unknown>) => c.superviseur_id === sId);
         const distinctPdv = new Set(sVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
+        const pdvCreated = (pvCreated || []).filter((p: Record<string, unknown>) => p.created_by === sId && p.created_by_role === "superviseur").length;
         return {
           id: sId,
           full_name: String(s.full_name),
           active: !!s.active,
           points_vente: distinctPdv,
+          points_vente_crees: pdvCreated,
           visites: sVisites.length,
           ventes: sVentes.length,
           controles: sControles.length,
@@ -1918,7 +1926,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!assignment) return jsonError(403, "Cette tournée ne vous est pas affectée");
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id };
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
       if (userTeamId) insertData.team_id = userTeamId;
       const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }
