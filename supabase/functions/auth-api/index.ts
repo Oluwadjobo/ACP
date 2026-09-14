@@ -528,6 +528,8 @@ async function handleRoute(req: Request): Promise<Response> {
     }
     return await failLogin();
   }
+
+  if (path === "/logout" && method === "POST") {
     const token = getBearerToken(req);
     if (token) await supabase.from("sessions").delete().eq("token", token);
     return jsonResponse({ success: true });
