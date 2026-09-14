@@ -1,0 +1,2 @@
+[functions.auth-api]
+verify_jwt = false

@@ -232,6 +232,8 @@ export const api = {
     method: "GET",
   }),
 
+  getTeamStats: () => apiRequest<import("@/types").TeamStats>("/team-stats", { method: "GET" }),
+
   listVisites: (page = 1, pageSize = 50) =>
     apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
       `/visites?page=${page}&pageSize=${pageSize}`,

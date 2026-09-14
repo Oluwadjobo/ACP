@@ -16,6 +16,7 @@ import { AdminSecteurs } from "@/pages/admin/AdminSecteurs";
 import { AdminBonsLivraison } from "@/pages/admin/AdminBonsLivraison";
 import { AdminAgentsLivreur } from "@/pages/admin/AdminAgentsLivreur";
 import { AdminCommandes } from "@/pages/admin/AdminCommandes";
+import { AdminTeamStats } from "@/pages/admin/AdminTeamStats";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
@@ -131,6 +132,7 @@ function AppRoutes() {
       {/* Admin - agent livreur management */}
       <Route path="/admin/agents-livreur" element={<ProtectedRoute allow="admin" permission="manage_agents_livreur"><AdminLayout><AdminAgentsLivreur /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/commandes" element={<ProtectedRoute allow="admin" permission="view_dashboard"><AdminLayout><AdminCommandes /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/team-stats" element={<ProtectedRoute allow="admin" permission="view_dashboard"><AdminLayout><AdminTeamStats /></AdminLayout></ProtectedRoute>} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

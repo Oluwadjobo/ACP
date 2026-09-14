@@ -341,6 +341,46 @@ export interface DashboardStats {
   lastVisite: string | null;
 }
 
+export interface TeamStats {
+  totals: {
+    points_vente: number;
+    visites: number;
+    ventes: number;
+    commandes: number;
+    livraisons: number;
+    controles: number;
+  };
+  commerciaux: {
+    id: string;
+    full_name: string;
+    active: boolean;
+    points_vente: number;
+    visites: number;
+    ventes: number;
+    ventes_non_realisees: number;
+    promesses: number;
+  }[];
+  agents_livreur: {
+    id: string;
+    full_name: string;
+    active: boolean;
+    points_vente: number;
+    commandes: number;
+    livrees: number;
+    en_cours: number;
+    livraisons: number;
+  }[];
+  superviseurs: {
+    id: string;
+    full_name: string;
+    active: boolean;
+    points_vente: number;
+    visites: number;
+    ventes: number;
+    controles: number;
+  }[];
+}
+
 export interface VisitResult {
   status: "confirmed" | "out_of_zone" | "duplicate" | "poor_gps";
   distance?: number;

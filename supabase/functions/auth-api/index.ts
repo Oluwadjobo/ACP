@@ -1400,6 +1400,112 @@ async function handleRoute(req: Request): Promise<Response> {
       });
       return jsonResponse({ success: true });
     }
+
+    // --- ADMIN: TEAM STATS (per-user performance) ---
+    if (path === "/team-stats" && method === "GET") {
+      { const denied = requireAnyAdminPermission("view_dashboard"); if (denied) return denied; }
+
+      let comQuery = supabase.from("commerciaux").select("id, full_name, active");
+      if (effectiveTeamId) comQuery = comQuery.eq("team_id", effectiveTeamId);
+      const { data: commerciaux } = await comQuery;
+
+      let visQuery = supabase.from("visites").select("commercial_id, superviseur_id, point_vente_id, vente_status");
+      if (effectiveTeamId) visQuery = visQuery.eq("team_id", effectiveTeamId);
+      const { data: visites } = await visQuery;
+
+      let ventQuery = supabase.from("ventes").select("id, commercial_id, superviseur_id");
+      if (effectiveTeamId) ventQuery = ventQuery.eq("team_id", effectiveTeamId);
+      const { data: ventes } = await ventQuery;
+
+      let pvQuery = supabase.from("points_vente").select("id", { count: "exact", head: true });
+      if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
+      const { count: pvCount } = await pvQuery;
+
+      let alQuery = supabase.from("agents_livreur").select("id, full_name, active");
+      if (effectiveTeamId) alQuery = alQuery.eq("team_id", effectiveTeamId);
+      const { data: agentsLivreur } = await alQuery;
+
+      let cmdQuery = supabase.from("commandes").select("agent_livreur_id, commercial_id, statut, point_vente_id");
+      if (effectiveTeamId) cmdQuery = cmdQuery.eq("team_id", effectiveTeamId);
+      const { data: commandes } = await cmdQuery;
+
+      let livQuery = supabase.from("livraisons").select("agent_livreur_id, point_vente_id");
+      if (effectiveTeamId) livQuery = livQuery.eq("team_id", effectiveTeamId);
+      const { data: livraisons } = await livQuery;
+
+      let supQuery = supabase.from("superviseurs").select("id, full_name, active");
+      if (effectiveTeamId) supQuery = supQuery.eq("team_id", effectiveTeamId);
+      const { data: superviseurs } = await supQuery;
+
+      let ctrlQuery = supabase.from("controles_terrain").select("superviseur_id");
+      if (effectiveTeamId) ctrlQuery = ctrlQuery.eq("team_id", effectiveTeamId);
+      const { data: controles } = await ctrlQuery;
+
+      const commercialStats = (commerciaux || []).map((c: Record<string, unknown>) => {
+        const cId = String(c.id);
+        const cVisites = (visites || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
+        const cVentes = (ventes || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
+        const distinctPdv = new Set(cVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
+        return {
+          id: cId,
+          full_name: String(c.full_name),
+          active: !!c.active,
+          points_vente: distinctPdv,
+          visites: cVisites.length,
+          ventes: cVentes.length,
+          ventes_non_realisees: cVisites.filter((v: Record<string, unknown>) => v.vente_status === "vente_non_realisee").length,
+          promesses: cVisites.filter((v: Record<string, unknown>) => v.vente_status === "promesse_achat").length,
+        };
+      });
+
+      const agentStats = (agentsLivreur || []).map((a: Record<string, unknown>) => {
+        const aId = String(a.id);
+        const aCommandes = (commandes || []).filter((c: Record<string, unknown>) => c.agent_livreur_id === aId);
+        const aLivraisons = (livraisons || []).filter((l: Record<string, unknown>) => l.agent_livreur_id === aId);
+        const distinctPdv = new Set(aLivraisons.map((l: Record<string, unknown>) => l.point_vente_id)).size;
+        return {
+          id: aId,
+          full_name: String(a.full_name),
+          active: !!a.active,
+          points_vente: distinctPdv,
+          commandes: aCommandes.length,
+          livrees: aCommandes.filter((c: Record<string, unknown>) => c.statut === "livree").length,
+          en_cours: aCommandes.filter((c: Record<string, unknown>) => c.statut === "en_cours_livraison" || c.statut === "en_attente_livraison").length,
+          livraisons: aLivraisons.length,
+        };
+      });
+
+      const superviseurStats = (superviseurs || []).map((s: Record<string, unknown>) => {
+        const sId = String(s.id);
+        const sVisites = (visites || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId);
+        const sVentes = (ventes || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId);
+        const sControles = (controles || []).filter((c: Record<string, unknown>) => c.superviseur_id === sId);
+        const distinctPdv = new Set(sVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
+        return {
+          id: sId,
+          full_name: String(s.full_name),
+          active: !!s.active,
+          points_vente: distinctPdv,
+          visites: sVisites.length,
+          ventes: sVentes.length,
+          controles: sControles.length,
+        };
+      });
+
+      return jsonResponse({
+        totals: {
+          points_vente: pvCount || 0,
+          visites: visites?.length || 0,
+          ventes: ventes?.length || 0,
+          commandes: commandes?.length || 0,
+          livraisons: livraisons?.length || 0,
+          controles: controles?.length || 0,
+        },
+        commerciaux: commercialStats,
+        agents_livreur: agentStats,
+        superviseurs: superviseurStats,
+      });
+    }
   }
   if (session.user_type === "commercial" || session.user_type === "superviseur") {
     const userId = session.user_id;
