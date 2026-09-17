@@ -13,8 +13,8 @@ function formatDateInput(d: Date): string {
 function getShortcutRange(shortcut: PeriodShortcut): { start: string; end: string } {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start = new Date(today);
-  const end = new Date(today);
+  let start = new Date(today);
+  let end = new Date(today);
 
   switch (shortcut) {
     case "today":
@@ -30,8 +30,11 @@ function getShortcutRange(shortcut: PeriodShortcut): { start: string; end: strin
     }
     case "last_week": {
       const day = start.getDay() || 7;
-      start.setDate(start.getDate() - day + 1 - 7);
-      end.setDate(start.getDate() + 6);
+      const lastMonday = new Date(start);
+      lastMonday.setDate(start.getDate() - day + 1 - 7);
+      start = lastMonday;
+      end = new Date(lastMonday);
+      end.setDate(end.getDate() + 6);
       break;
     }
     case "this_month":
@@ -126,6 +129,7 @@ export function AdminTeamStats() {
   const exportPdf = () => {
     if (!stats) return;
     import("jspdf").then(({ default: jsPDF }) => {
+      try {
       const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
       const pw = pdf.internal.pageSize.getWidth();
       let y = 15;
@@ -197,13 +201,14 @@ export function AdminTeamStats() {
         stats.superviseurs.map(s => [s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_crees), String(s.points_vente), String(s.visites), String(s.ventes), String(s.controles)]));
 
       pdf.save(`statistiques_${teamCode || "equipe"}_${dateStart || "debut"}_${dateEnd || "fin"}.pdf`);
-    });
+      } catch (e) { console.error("PDF export error:", e); }
+    }).catch((e) => console.error("PDF import error:", e));
   };
 
   const exportExcel = () => {
     if (!stats) return;
     setExporting(true);
-    import("jspdf").then(() => {
+    try {
       const headers = ["Catégorie", "Nom", "Statut", "PDV créés", "PDV visités", "Visites", "Ventes", "Ventes non réalisées", "Promesses", "Contrôles", "Commandes", "Livrées", "En cours", "Livraisons"];
       const rows: string[][] = [];
       stats.commerciaux.forEach(c => rows.push(["Commercial", c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_crees), String(c.points_vente), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses), "", "", "", "", ""]));
@@ -226,8 +231,8 @@ export function AdminTeamStats() {
       link.href = URL.createObjectURL(blob);
       link.download = `statistiques_${teamCode || "equipe"}_${dateStart || "debut"}_${dateEnd || "fin"}.xls`;
       link.click();
-      setExporting(false);
-    });
+    } catch (e) { console.error("Excel export error:", e); }
+    finally { setExporting(false); }
   };
 
   if (loading) {

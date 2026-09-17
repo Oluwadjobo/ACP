@@ -23,7 +23,7 @@ export function AdminDashboard() {
     while (true) {
       const res = await api.listVisites(page, 200);
       all.push(...res.data);
-      if (all.length >= res.count || res.data.length === 0) break;
+      if (all.length >= res.count || res.data.length === 0 || res.data.length < 200) break;
       page++;
     }
     return all;

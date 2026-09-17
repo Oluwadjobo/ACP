@@ -1440,12 +1440,6 @@ async function handleRoute(req: Request): Promise<Response> {
       const startIso = dateStart ? new Date(dateStart + "T00:00:00").toISOString() : null;
       const endIso = dateEnd ? new Date(dateEnd + "T23:59:59").toISOString() : null;
 
-      function applyDateFilter<T extends { gte?: string; lte?: string; visited_at?: string; created_at?: string }>(q: T, dateField: string): T {
-        if (startIso) q = q.gte(dateField, startIso) as T;
-        if (endIso) q = q.lte(dateField, endIso) as T;
-        return q;
-      }
-
       let comQuery = supabase.from("commerciaux").select("id, full_name, active");
       if (effectiveTeamId) comQuery = comQuery.eq("team_id", effectiveTeamId);
       const { data: commerciaux } = await comQuery;
@@ -1541,7 +1535,7 @@ async function handleRoute(req: Request): Promise<Response> {
           points_vente: distinctPdv,
           commandes: aCommandes.length,
           livrees: aCommandes.filter((c: Record<string, unknown>) => c.statut === "livree").length,
-          en_cours: aCommandes.filter((c: Record<string, unknown>) => c.statut === "en_cours_livraison" || c.statut === "en_attente_livraison").length,
+          en_cours: aCommandes.filter((c: Record<string, unknown>) => c.statut !== "livree" && c.statut !== "annulee").length,
           livraisons: aLivraisons.length,
         };
       });
@@ -1809,7 +1803,11 @@ async function handleRoute(req: Request): Promise<Response> {
       const { point_vente_id, visite_id, notation, presence_comtesse, disponibilite, visibilite, merchandising, presence_concurrents, commentaires, recommandations, actions_correctives } = await req.json();
       if (!point_vente_id || !notation) return jsonError(400, "Point de vente et notation requis");
       if (!CONTROLE_NOTATIONS.includes(notation)) return jsonError(400, "Notation invalide");
-      const secteur_id = await getSuperviseurSecteur(userId, userTeamId);
+      let pvCheck = supabase.from("points_vente").select("id, secteur_id").eq("id", point_vente_id);
+      if (userTeamId) pvCheck = pvCheck.eq("team_id", userTeamId);
+      const { data: pvExists } = await pvCheck.maybeSingle();
+      if (!pvExists) return jsonError(404, "Point de vente introuvable");
+      const secteur_id = pvExists.secteur_id || await getSuperviseurSecteur(userId, userTeamId);
       const insertData: Record<string, unknown> = {
         superviseur_id: userId, point_vente_id, visite_id: visite_id || null, secteur_id,
         notation, presence_comtesse: !!presence_comtesse, disponibilite: !!disponibilite,
@@ -2007,7 +2005,7 @@ async function handleRoute(req: Request): Promise<Response> {
         if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
         const { count: totalPv } = await pvQ;
 
-        let visQ = supabase.from("visites").select("id, vente_status, visited_at", { count: "exact" }).eq("secteur_id", secId);
+        let visQ = supabase.from("visites").select("id, point_vente_id, vente_status, visited_at", { count: "exact" }).eq("secteur_id", secId);
         if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
         else visQ = visQ.eq("superviseur_id", userId);
         if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
@@ -2374,7 +2372,7 @@ async function handleRoute(req: Request): Promise<Response> {
         statut, updated_at: now, agent_validation_at: now,
         ...(statut === "livree" ? { date_livraison: now } : {}),
       };
-      const { error: updateError } = await supabase.from("commandes").update(updates).eq("id", id);
+      const { error: updateError } = await supabase.from("commandes").update(updates).eq("id", id).eq("agent_livreur_id", userId);
       if (updateError) return jsonError(500, "Erreur lors de la validation");
       // Create livraison traceability record
       await supabase.from("livraisons").insert({
@@ -2460,7 +2458,7 @@ async function handleRoute(req: Request): Promise<Response> {
           total_commandes: secCmds.length,
           livrees,
           en_cours: enCours,
-          restantes: Math.max(0, secCmds.length - livrees),
+          restantes: Math.max(0, secCmds.filter((c: Record<string, unknown>) => c.statut !== "livree" && c.statut !== "annulee").length),
           statut: livrees === 0 ? "a_venir" : livrees >= secCmds.length ? "terminee" : "en_cours",
         };
       });

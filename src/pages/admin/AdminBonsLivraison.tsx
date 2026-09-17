@@ -37,9 +37,9 @@ export function AdminBonsLivraison() {
   const filtered = bls.filter((bl) => {
     const q = search.toLowerCase();
     const matchSearch = !q || bl.numero.toLowerCase().includes(q) ||
-      bl.point_vente?.name.toLowerCase().includes(q) ||
-      bl.commercial?.full_name.toLowerCase().includes(q) ||
-      bl.superviseur?.full_name.toLowerCase().includes(q);
+      bl.point_vente?.name?.toLowerCase().includes(q) ||
+      bl.commercial?.full_name?.toLowerCase().includes(q) ||
+      bl.superviseur?.full_name?.toLowerCase().includes(q);
     const matchStatut = !filterStatut || bl.statut === filterStatut;
     return matchSearch && matchStatut;
   });

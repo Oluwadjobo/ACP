@@ -130,7 +130,7 @@ export function AdminPointsVente() {
                     <MapPin size={12} className="mt-0.5 flex-shrink-0" />
                     <span className="truncate">{p.address}, {p.city}</span>
                   </p>
-                  <p className="text-gray-400">GPS: {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}</p>
+                  <p className="text-gray-400">GPS: {p.latitude != null && p.longitude != null ? `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}` : "Non défini"}</p>
                   <p className="flex items-center gap-1.5">
                     <Calendar size={12} className="flex-shrink-0" />
                     <span>Créé le {new Date(p.created_at).toLocaleDateString("fr-FR")}</span>
