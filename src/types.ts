@@ -209,6 +209,8 @@ export interface PointVente {
   secteur_id?: string | null;
   secteur_nom?: string | null;
   team_id?: string | null;
+  frigo_comtesse?: boolean | null;
+  commercial_nom?: string | null;
   created_at: string;
   updated_at?: string;
 }

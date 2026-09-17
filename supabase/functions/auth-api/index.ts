@@ -1033,20 +1033,34 @@ async function handleRoute(req: Request): Promise<Response> {
         const { data: secteurs } = await secQuery;
         for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
       }
+      // Fetch commercial names per secteur via commercial_tournees
+      let commercialMap: Record<string, string> = {};
+      if (secteurIds.length > 0) {
+        let ctQuery = supabase.from("commercial_tournees").select("secteur_id, commercial:commerciaux(full_name)").in("secteur_id", secteurIds);
+        if (effectiveTeamId) ctQuery = ctQuery.eq("team_id", effectiveTeamId);
+        const { data: ctData } = await ctQuery;
+        for (const row of (ctData || []) as Record<string, unknown>[]) {
+          const sid = String(row.secteur_id);
+          const commercial = row.commercial as Record<string, unknown> | null;
+          if (commercial?.full_name && !commercialMap[sid]) commercialMap[sid] = String(commercial.full_name);
+        }
+      }
       const enriched = (points || []).map((p: Record<string, unknown>) => {
         const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
-        return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null };
+        const commercial_nom = p.secteur_id ? commercialMap[String(p.secteur_id)] ?? null : null;
+        return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null, commercial_nom };
       });
       return jsonResponse(enriched);
     }
     if (path === "/points-vente" && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
-      const { name, address, city, latitude, longitude, secteur_id } = await req.json();
+      const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
       const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
       if (secteur_id) insertData.secteur_id = secteur_id;
+      if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
       const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }
@@ -1063,6 +1077,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.latitude !== undefined) updates.latitude = Number(body.latitude);
       if (body.longitude !== undefined) updates.longitude = Number(body.longitude);
       if (body.secteur_id !== undefined) updates.secteur_id = body.secteur_id || null;
+      if (body.frigo_comtesse !== undefined) updates.frigo_comtesse = body.frigo_comtesse === null ? null : Boolean(body.frigo_comtesse);
       let query = supabase.from("points_vente").update(updates).eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query.select("*").maybeSingle();
@@ -2135,7 +2150,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- CREATE POINT DE VENTE (field users) ---
     if (path === "/points-vente" && method === "POST") {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
-      const { name, address, city, latitude, longitude, secteur_id } = await req.json();
+      const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null || !secteur_id) return jsonError(400, "Tous les champs sont requis, y compris la tournée");
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
@@ -2147,6 +2162,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
       const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
+      if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (userTeamId) insertData.team_id = userTeamId;
       const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }

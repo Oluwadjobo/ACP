@@ -209,6 +209,7 @@ export const api = {
     latitude: number;
     longitude: number;
     secteur_id?: string;
+    frigo_comtesse?: boolean | null;
   }) =>
     apiRequest<import("@/types").PointVente>("/points-vente", {
       method: "POST",
@@ -217,7 +218,7 @@ export const api = {
 
   updatePointVente: (
     id: string,
-    body: Partial<{ name: string; address: string; city: string; latitude: number; longitude: number; secteur_id: string | null }>
+    body: Partial<{ name: string; address: string; city: string; latitude: number; longitude: number; secteur_id: string | null; frigo_comtesse: boolean | null }>
   ) =>
     apiRequest<import("@/types").PointVente>(`/points-vente/${id}`, {
       method: "PUT",

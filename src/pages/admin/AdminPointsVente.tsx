@@ -6,8 +6,11 @@ import { api } from "@/lib/api";
 import type { PointVente, Secteur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { getAccuratePosition } from "@/lib/gps";
+import { useAuth } from "@/lib/auth";
 
 export function AdminPointsVente() {
+  const { teamCode } = useAuth();
+  const isYaourt = teamCode === "YAOURT";
   const [points, setPoints] = useState<PointVente[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -37,7 +40,7 @@ export function AdminPointsVente() {
   );
 
   const exportCsv = () => {
-    const headers = ["Code", "Nom", "Adresse", "Ville", "Latitude", "Longitude", "Tournee", "Date creation"];
+    const headers = ["Code", "Nom", "Adresse", "Ville", "Latitude", "Longitude", "Tournee", "Commercial", "Date creation"];
     const rows = filtered.map((p) => [
       p.code,
       p.name,
@@ -46,6 +49,7 @@ export function AdminPointsVente() {
       p.latitude.toString(),
       p.longitude.toString(),
       p.secteur_nom || "",
+      p.commercial_nom || "",
       new Date(p.created_at).toLocaleDateString("fr-FR"),
     ]);
     const csv = [headers, ...rows]
@@ -150,7 +154,7 @@ export function AdminPointsVente() {
         )}
       </div>
 
-      <PointVenteModal open={modalOpen} editing={editing} onClose={() => setModalOpen(false)} onSaved={() => { setModalOpen(false); load(); }} showToast={showToast} />
+      <PointVenteModal open={modalOpen} editing={editing} onClose={() => setModalOpen(false)} onSaved={() => { setModalOpen(false); load(); }} showToast={showToast} isYaourt={isYaourt} />
       <QrModal point={qrModal} onClose={() => setQrModal(null)} />
       <DeleteModal target={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={() => { setDeleteTarget(null); load(); }} showToast={showToast} />
     </div>
@@ -158,13 +162,14 @@ export function AdminPointsVente() {
 }
 
 function PointVenteModal({
-  open, editing, onClose, onSaved, showToast,
+  open, editing, onClose, onSaved, showToast, isYaourt,
 }: {
   open: boolean;
   editing: PointVente | null;
   onClose: () => void;
   onSaved: () => void;
   showToast: (type: "success" | "error", msg: string) => void;
+  isYaourt: boolean;
 }) {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -175,6 +180,7 @@ function PointVenteModal({
   const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [gettingGps, setGettingGps] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [frigoComtesse, setFrigoComtesse] = useState<string>("");
 
   useEffect(() => {
     if (open) {
@@ -185,6 +191,7 @@ function PointVenteModal({
       setLatitude(editing?.latitude?.toString() || "");
       setLongitude(editing?.longitude?.toString() || "");
       setSecteurId(editing?.secteur_id || "");
+      setFrigoComtesse(editing?.frigo_comtesse === true ? "oui" : editing?.frigo_comtesse === false ? "non" : "");
     }
   }, [open, editing]);
 
@@ -213,10 +220,10 @@ function PointVenteModal({
     setSaving(true);
     try {
       if (editing) {
-        await api.updatePointVente(editing.id, { name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || null });
+        await api.updatePointVente(editing.id, { name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || null, ...(isYaourt ? { frigo_comtesse: frigoComtesse === "oui" ? true : frigoComtesse === "non" ? false : null } : {}) });
         showToast("success", "Point de vente modifié");
       } else {
-        await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined });
+        await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined, ...(isYaourt ? { frigo_comtesse: frigoComtesse === "oui" ? true : frigoComtesse === "non" ? false : null } : {}) });
         showToast("success", "Point de vente créé");
       }
       onSaved();
@@ -256,6 +263,16 @@ function PointVenteModal({
             </p>
           )}
         </div>
+        {isYaourt && (
+          <div>
+            <label className="label">Frigo Comtesse</label>
+            <select className="input" value={frigoComtesse} onChange={(e) => setFrigoComtesse(e.target.value)}>
+              <option value="">Sélectionnez...</option>
+              <option value="oui">Oui</option>
+              <option value="non">Non</option>
+            </select>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">Latitude</label>

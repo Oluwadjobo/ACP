@@ -671,6 +671,8 @@ export function FieldScanner() {
 }
 
 function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const { teamCode } = useAuth();
+  const isYaourt = teamCode === "YAOURT";
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
@@ -681,11 +683,12 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
   const [gettingGps, setGettingGps] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [frigoComtesse, setFrigoComtesse] = useState<string>("");
 
   useEffect(() => {
     if (open) {
       api.listSecteurs().then(setSecteurs).catch(() => {});
-      setName(""); setAddress(""); setCity(""); setLatitude(""); setLongitude(""); setSecteurId(""); setError("");
+      setName(""); setAddress(""); setCity(""); setLatitude(""); setLongitude(""); setSecteurId(""); setError(""); setFrigoComtesse("");
     }
   }, [open]);
 
@@ -710,7 +713,7 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
     if (isNaN(lng) || lng < -180 || lng > 180) { setError("Longitude invalide"); return; }
     setSaving(true);
     try {
-      await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined });
+      await api.createPointVente({ name, address, city, latitude: lat, longitude: lng, secteur_id: secteurId || undefined, ...(isYaourt ? { frigo_comtesse: frigoComtesse === "oui" ? true : frigoComtesse === "non" ? false : null } : {}) });
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur");
@@ -750,6 +753,16 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
               ))}
             </select>
           </div>
+          {isYaourt && (
+            <div>
+              <label className="label">Frigo Comtesse</label>
+              <select className="input" value={frigoComtesse} onChange={(e) => setFrigoComtesse(e.target.value)}>
+                <option value="">Sélectionnez...</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Latitude</label>
