@@ -1021,12 +1021,20 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- POINTS DE VENTE CRUD ---
     if (path === "/points-vente" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
-      let query = supabase.from("points_vente").select("*, secteur:secteurs!left(id, nom, code, color_code)").order("created_at", { ascending: false });
-      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      const enriched = (data || []).map((p: Record<string, unknown>) => {
-        const secteur = p.secteur as Record<string, unknown> | null;
+      let pvQuery = supabase.from("points_vente").select("*").order("created_at", { ascending: false });
+      if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
+      const { data: points, error: pvError } = await pvQuery;
+      if (pvError) return jsonError(500, "Erreur de lecture");
+      const secteurIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.secteur_id).filter(Boolean))] as string[];
+      let secteurMap: Record<string, Record<string, unknown>> = {};
+      if (secteurIds.length > 0) {
+        let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secteurIds);
+        if (effectiveTeamId) secQuery = secQuery.eq("team_id", effectiveTeamId);
+        const { data: secteurs } = await secQuery;
+        for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
+      }
+      const enriched = (points || []).map((p: Record<string, unknown>) => {
+        const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
         return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null };
       });
       return jsonResponse(enriched);
@@ -1810,7 +1818,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs!left(nom)")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id")
         .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
         .limit(20);
       if (userTeamId) query = query.eq("team_id", userTeamId);
@@ -2065,7 +2073,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (secteurIds.length === 0) return jsonResponse([]);
 
       let pvQ = supabase.from("points_vente")
-        .select("id, code, name, address, city, telephone, latitude, longitude, secteur_id, secteur:secteurs!left(nom, code, color_code)")
+        .select("id, code, name, address, city, telephone, latitude, longitude, secteur_id")
         .in("secteur_id", secteurIds)
         .order("name", { ascending: true });
       if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
@@ -2073,6 +2081,14 @@ async function handleRoute(req: Request): Promise<Response> {
       if (pvErr) return jsonError(500, "Erreur de lecture");
 
       const pvIds = (points || []).map((p: Record<string, unknown>) => p.id);
+      const secIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.secteur_id).filter(Boolean))] as string[];
+      let secteurMap: Record<string, Record<string, unknown>> = {};
+      if (secIds.length > 0) {
+        let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secIds);
+        if (userTeamId) secQuery = secQuery.eq("team_id", userTeamId);
+        const { data: secteurs } = await secQuery;
+        for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
+      }
       let visQ = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status").in("point_vente_id", pvIds).order("visited_at", { ascending: false });
       if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
       else visQ = visQ.eq("superviseur_id", userId);
@@ -2095,7 +2111,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const enriched = (points || []).map((p: Record<string, unknown>) => {
         const pId = String(p.id);
         const lastVisite = visByPv.get(pId);
-        const secteur = p.secteur as Record<string, unknown> | null;
+        const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
         return {
           id: p.id,
           code: p.code,
@@ -2328,7 +2344,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs!left(nom)")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id")
         .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
         .limit(20);
       if (userTeamId) query = query.eq("team_id", userTeamId);
@@ -2383,12 +2399,21 @@ async function handleRoute(req: Request): Promise<Response> {
       let cmdQ = supabase
         .from("commandes")
         .select(`id, code, statut, date_livraison, point_vente_id, secteur_id,
-          point_vente:points_vente(id, code, name, address, city, telephone, latitude, longitude, secteur:secteurs!left(nom, code, color_code))`)
+          point_vente:points_vente(id, code, name, address, city, telephone, latitude, longitude, secteur_id)`)
         .eq("agent_livreur_id", userId)
         .order("created_at", { ascending: false });
       if (userTeamId) cmdQ = cmdQ.eq("team_id", userTeamId);
       const { data: commandes, error: cmdErr } = await cmdQ;
       if (cmdErr) return jsonError(500, "Erreur de lecture");
+
+      const secIds = [...new Set((commandes || []).map((c: Record<string, unknown>) => c.secteur_id).filter(Boolean))] as string[];
+      let secteurMap: Record<string, Record<string, unknown>> = {};
+      if (secIds.length > 0) {
+        let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secIds);
+        if (userTeamId) secQuery = secQuery.eq("team_id", userTeamId);
+        const { data: secteurs } = await secQuery;
+        for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
+      }
 
       const seen = new Set<string>();
       const points: Record<string, unknown>[] = [];
@@ -2398,7 +2423,7 @@ async function handleRoute(req: Request): Promise<Response> {
         const pvId = String(pv.id);
         if (seen.has(pvId)) continue;
         seen.add(pvId);
-        const secteur = pv.secteur as Record<string, unknown> | null;
+        const secteur = pv.secteur_id ? secteurMap[String(pv.secteur_id)] ?? null : null;
         points.push({
           id: pv.id,
           code: pv.code,

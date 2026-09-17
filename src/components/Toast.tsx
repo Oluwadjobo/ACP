@@ -1,11 +1,12 @@
 import { type ReactNode } from "react";
-import { CheckCircle2, XCircle, AlertTriangle, Info } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
 
 type ToastType = "success" | "error" | "warning" | "info";
 
 interface ToastProps {
-  type: ToastType;
+  type?: ToastType;
   message: string;
+  onClose?: () => void;
 }
 
 const config: Record<ToastType, { icon: typeof CheckCircle2; color: string; bg: string }> = {
@@ -15,13 +16,18 @@ const config: Record<ToastType, { icon: typeof CheckCircle2; color: string; bg: 
   info: { icon: Info, color: "text-primary-600", bg: "bg-primary-50 border-primary-200" },
 };
 
-export function Toast({ type, message }: ToastProps) {
-  const { icon: Icon, color, bg } = config[type];
+export function Toast({ type = "error", message, onClose }: ToastProps) {
+  const { icon: Icon, color, bg } = config[type] ?? config.error;
   return (
     <div className={`fixed top-4 left-1/2 z-[60] -translate-x-1/2 animate-slide-up`}>
       <div className={`flex items-center gap-3 rounded-xl border ${bg} px-5 py-3 shadow-lg max-w-sm`}>
         <Icon size={20} className={color} />
         <p className="text-sm font-medium text-gray-800">{message}</p>
+        {onClose && (
+          <button type="button" onClick={onClose} className="ml-1 rounded-md p-1 text-gray-500 hover:bg-black/5 hover:text-gray-700" aria-label="Fermer">
+            <X size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
