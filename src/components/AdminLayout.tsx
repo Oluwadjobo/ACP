@@ -1,6 +1,6 @@
 import { type ReactNode, useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Truck, ClipboardList, BarChart3 } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Leaf, Truck, ClipboardList, BarChart3 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Permission, Team } from "@/types";
@@ -30,11 +30,13 @@ const allNavItems: NavItem[] = [
 const TEAM_LABELS: Record<string, string> = {
   YAOURT: "Yaourt Team",
   EAU: "Eau Team",
+  OPLANETE: "OPlanète Team",
 };
 
 const TEAM_ICONS: Record<string, typeof Milk> = {
   YAOURT: Milk,
   EAU: Droplets,
+  OPLANETE: Leaf,
 };
 
 export function AdminLayout({ children }: { children: ReactNode }) {

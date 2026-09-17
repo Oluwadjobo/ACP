@@ -132,6 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     if (state.teamCode === "EAU") {
       document.documentElement.setAttribute("data-team", "EAU");
+    } else if (state.teamCode === "OPLANETE") {
+      document.documentElement.setAttribute("data-team", "OPLANETE");
     } else {
       document.documentElement.removeAttribute("data-team");
     }

@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MapPin, User, Lock, Eye, EyeOff, ScanLine, Shield, ArrowLeft, Droplets, Milk } from "lucide-react";
+import { MapPin, User, Lock, Eye, EyeOff, ScanLine, Shield, ArrowLeft, Droplets, Milk, Leaf } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 const TEAM_CONFIG: Record<string, { name: string; color: string; icon: typeof Milk }> = {
   yaourt: { name: "Yaourt Team", color: "#1D6FB8", icon: Milk },
   eau: { name: "Eau Team", color: "#f30714", icon: Droplets },
+  oplanete: { name: "OPlanète Team", color: "#0E9F6E", icon: Leaf },
   superadmin: { name: "Accès Super Administrateur", color: "#1f2937", icon: Shield },
 };
 
@@ -15,7 +16,7 @@ export function LoginPage() {
   const { team } = useParams<{ team: string }>();
   const teamKey = team?.toLowerCase() || "yaourt";
   const teamConfig = TEAM_CONFIG[teamKey] || TEAM_CONFIG.yaourt;
-  const teamCode = teamKey === "yaourt" ? "YAOURT" : teamKey === "eau" ? "EAU" : undefined;
+  const teamCode = teamKey === "yaourt" ? "YAOURT" : teamKey === "eau" ? "EAU" : teamKey === "oplanete" ? "OPLANETE" : undefined;
 
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");

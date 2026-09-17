@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Droplets, Milk, ArrowRight, MapPin } from "lucide-react";
+import { Droplets, Milk, ArrowRight, MapPin, Leaf } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Team } from "@/types";
 
 const TEAM_ICONS: Record<string, typeof Milk> = {
   YAOURT: Milk,
   EAU: Droplets,
+  OPLANETE: Leaf,
 };
 
 export function TeamSelectionPage() {
@@ -24,6 +25,7 @@ export function TeamSelectionPage() {
         setTeams([
           { id: "yaourt", code: "YAOURT", name: "Yaourt Team", color: "#1D6FB8", created_at: "" },
           { id: "eau", code: "EAU", name: "Eau Team", color: "#f30714", created_at: "" },
+          { id: "oplanete", code: "OPLANETE", name: "OPlanète Team", color: "#0E9F6E", created_at: "" },
         ]);
       })
       .finally(() => setLoading(false));
@@ -56,6 +58,7 @@ export function TeamSelectionPage() {
           {teams.map((team, index) => {
             const Icon = TEAM_ICONS[team.code] || Milk;
             const isHovered = hovered === team.code;
+            const teamLabel = team.code === "YAOURT" ? "Yaourt" : team.code === "EAU" ? "Eau" : team.code === "OPLANETE" ? "OPlanète" : team.code;
             return (
               <button
                 key={team.id}
@@ -80,7 +83,7 @@ export function TeamSelectionPage() {
                     <Icon size={36} style={{ color: team.color }} />
                   </div>
                   <h3 className="text-xl font-bold text-gray-900 mb-1">{team.name}</h3>
-                  <p className="text-sm text-gray-400 mb-6">COMTESSE {team.code === "YAOURT" ? "Yaourt" : "Eau"}</p>
+                  <p className="text-sm text-gray-400 mb-6">COMTESSE {teamLabel}</p>
                   <div
                     className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all duration-300 group-hover:gap-3 group-hover:shadow-lg"
                     style={{ backgroundColor: isHovered ? team.color : team.color + "DD" }}

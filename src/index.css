@@ -33,6 +33,20 @@
   --c-primary-950: #5c0e0e;
 }
 
+:root[data-team="OPLANETE"] {
+  --c-primary-50: #ecfdf5;
+  --c-primary-100: #d1fae5;
+  --c-primary-200: #a7f3d0;
+  --c-primary-300: #6ee7b7;
+  --c-primary-400: #34d399;
+  --c-primary-500: #10b981;
+  --c-primary-600: #0E9F6E;
+  --c-primary-700: #047857;
+  --c-primary-800: #065f46;
+  --c-primary-900: #064e3b;
+  --c-primary-950: #022c22;
+}
+
 @layer base {
   * {
     -webkit-tap-highlight-color: transparent;

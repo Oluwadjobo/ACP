@@ -2,7 +2,7 @@ export type UserType = "admin" | "commercial" | "superviseur" | "agent_livreur";
 
 export type AdminRole = "super_admin" | "admin";
 
-export type TeamCode = "YAOURT" | "EAU";
+export type TeamCode = "YAOURT" | "EAU" | "OPLANETE";
 
 export interface Team {
   id: string;
