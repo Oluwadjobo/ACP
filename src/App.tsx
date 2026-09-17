@@ -24,6 +24,9 @@ import { SuperviseurControleTerrain } from "@/pages/superviseur/SuperviseurContr
 import { AgentLivreurCommandes } from "@/pages/agent_livreur/AgentLivreurCommandes";
 import { AgentLivreurHistorique } from "@/pages/agent_livreur/AgentLivreurHistorique";
 import { PointVenteSearch } from "@/pages/shared/PointVenteSearch";
+import { MesTournees } from "@/pages/shared/MesTournees";
+import { TourneeDetail } from "@/pages/shared/TourneeDetail";
+import { MesPointsVente } from "@/pages/shared/MesPointsVente";
 import { ShieldAlert } from "lucide-react";
 import type { UserType, Permission } from "@/types";
 
@@ -113,6 +116,9 @@ function AppRoutes() {
       {/* Commercial routes */}
       <Route path="/commercial" element={<ProtectedRoute allow="commercial" permission="scan"><FieldScanner /></ProtectedRoute>} />
       <Route path="/commercial/historique" element={<ProtectedRoute allow="commercial" permission="view_history"><FieldHistory /></ProtectedRoute>} />
+      <Route path="/commercial/tournees" element={<ProtectedRoute allow="commercial"><MesTournees /></ProtectedRoute>} />
+      <Route path="/commercial/tournee/:id" element={<ProtectedRoute allow="commercial"><TourneeDetail /></ProtectedRoute>} />
+      <Route path="/commercial/points-vente" element={<ProtectedRoute allow="commercial"><MesPointsVente /></ProtectedRoute>} />
 
       {/* Superviseur routes */}
       <Route path="/superviseur" element={<ProtectedRoute allow="superviseur" permission="scan"><FieldScanner /></ProtectedRoute>} />
@@ -120,6 +126,9 @@ function AppRoutes() {
       <Route path="/superviseur/ventes-non-realisees" element={<ProtectedRoute allow="superviseur" permission="view_ventes_non_realisees"><SuperviseurVentesNonRealisees /></ProtectedRoute>} />
       <Route path="/superviseur/controle-terrain" element={<ProtectedRoute allow="superviseur" permission="control_terrain"><SuperviseurControleTerrain /></ProtectedRoute>} />
       <Route path="/superviseur/recherche" element={<ProtectedRoute allow="superviseur" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+      <Route path="/superviseur/tournees" element={<ProtectedRoute allow="superviseur"><MesTournees /></ProtectedRoute>} />
+      <Route path="/superviseur/tournee/:id" element={<ProtectedRoute allow="superviseur"><TourneeDetail /></ProtectedRoute>} />
+      <Route path="/superviseur/points-vente" element={<ProtectedRoute allow="superviseur"><MesPointsVente /></ProtectedRoute>} />
 
       {/* Commercial routes - search */}
       <Route path="/commercial/recherche" element={<ProtectedRoute allow="commercial" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
@@ -128,6 +137,9 @@ function AppRoutes() {
       <Route path="/agent-livreur" element={<ProtectedRoute allow="agent_livreur" permission="view_commandes_livraison"><AgentLivreurCommandes /></ProtectedRoute>} />
       <Route path="/agent-livreur/historique" element={<ProtectedRoute allow="agent_livreur" permission="view_historique_livraisons"><AgentLivreurHistorique /></ProtectedRoute>} />
       <Route path="/agent-livreur/recherche" element={<ProtectedRoute allow="agent_livreur" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+      <Route path="/agent-livreur/tournees" element={<ProtectedRoute allow="agent_livreur"><MesTournees /></ProtectedRoute>} />
+      <Route path="/agent-livreur/tournee/:id" element={<ProtectedRoute allow="agent_livreur"><TourneeDetail /></ProtectedRoute>} />
+      <Route path="/agent-livreur/points-vente" element={<ProtectedRoute allow="agent_livreur"><MesPointsVente /></ProtectedRoute>} />
 
       {/* Admin - agent livreur management */}
       <Route path="/admin/agents-livreur" element={<ProtectedRoute allow="admin" permission="manage_agents_livreur"><AdminLayout><AdminAgentsLivreur /></AdminLayout></ProtectedRoute>} />

@@ -262,6 +262,8 @@ export function FieldScanner() {
 
   const homePath = isSuperviseur ? "/superviseur" : "/commercial";
   const historyPath = isSuperviseur ? "/superviseur/historique" : "/commercial/historique";
+  const tourneesPath = isSuperviseur ? "/superviseur/tournees" : "/commercial/tournees";
+  const pointsPath = isSuperviseur ? "/superviseur/points-vente" : "/commercial/points-vente";
   const ventesNonRealiseesPath = "/superviseur/ventes-non-realisees";
   const controleTerrainPath = "/superviseur/controle-terrain";
   const roleLabel = isSuperviseur ? "Team Leader" : "Commercial";
@@ -271,6 +273,8 @@ export function FieldScanner() {
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><ScanLine size={20} /><span className="font-bold text-sm">Contrôle Présence</span></div>
         <div className="flex items-center gap-1">
+          <button onClick={() => navigate(tourneesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes tournées"><MapPin size={20} /></button>
+          <button onClick={() => navigate(pointsPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes points de vente"><Store size={20} /></button>
           {isSuperviseur && hasPermission("view_ventes_non_realisees") && (
             <button onClick={() => navigate(ventesNonRealiseesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Ventes non réalisées"><TrendingDown size={20} /></button>
           )}

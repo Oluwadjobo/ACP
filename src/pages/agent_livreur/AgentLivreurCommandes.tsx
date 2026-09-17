@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Package, MapPin, User, Clock, CheckCircle2, XCircle, Loader2, Navigation, Store } from "lucide-react";
+import { Package, MapPin, User, Clock, CheckCircle2, XCircle, Loader2, Navigation, Store, History } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Toast } from "@/components/Toast";
@@ -26,6 +27,7 @@ const STATUT_COLORS: Record<CommandeStatut, string> = {
 
 export function AgentLivreurCommandes() {
   const { hasPermission } = useAuth();
+  const navigate = useNavigate();
   const [commandes, setCommandes] = useState<Commande[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
@@ -57,7 +59,14 @@ export function AgentLivreurCommandes() {
     <div className="min-h-screen bg-gray-50 pb-20">
       <div className="bg-primary-900 text-white px-4 py-5 sticky top-0 z-20">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-lg font-bold flex items-center gap-2"><Package size={22} /> Commandes à livrer</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-lg font-bold flex items-center gap-2"><Package size={22} /> Commandes à livrer</h1>
+            <div className="flex items-center gap-1">
+              <button onClick={() => navigate("/agent-livreur/tournees")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes tournées"><MapPin size={18} /></button>
+              <button onClick={() => navigate("/agent-livreur/points-vente")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes points de vente"><Store size={18} /></button>
+              <button onClick={() => navigate("/agent-livreur/historique")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Historique"><History size={18} /></button>
+            </div>
+          </div>
           <p className="text-primary-300 text-xs mt-0.5">Validez les livraisons de vos commerciaux</p>
         </div>
       </div>

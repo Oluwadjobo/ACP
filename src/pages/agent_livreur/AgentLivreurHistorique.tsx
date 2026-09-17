@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { History, Package, MapPin, User, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { History, Package, MapPin, User, CheckCircle2, XCircle, Loader2, Store } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 
@@ -16,6 +17,7 @@ interface LivraisonRecord {
 }
 
 export function AgentLivreurHistorique() {
+  const navigate = useNavigate();
   const [livraisons, setLivraisons] = useState<LivraisonRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
@@ -31,7 +33,14 @@ export function AgentLivreurHistorique() {
     <div className="min-h-screen bg-gray-50 pb-20">
       <div className="bg-primary-900 text-white px-4 py-5 sticky top-0 z-20">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-lg font-bold flex items-center gap-2"><History size={22} /> Historique des livraisons</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-lg font-bold flex items-center gap-2"><History size={22} /> Historique des livraisons</h1>
+            <div className="flex items-center gap-1">
+              <button onClick={() => navigate("/agent-livreur")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Commandes"><Package size={18} /></button>
+              <button onClick={() => navigate("/agent-livreur/tournees")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes tournées"><MapPin size={18} /></button>
+              <button onClick={() => navigate("/agent-livreur/points-vente")} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes points de vente"><Store size={18} /></button>
+            </div>
+          </div>
           <p className="text-primary-300 text-xs mt-0.5">Toutes vos validations de livraison</p>
         </div>
       </div>

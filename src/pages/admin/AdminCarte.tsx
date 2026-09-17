@@ -133,7 +133,13 @@ export function AdminCarte() {
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [isFullscreen, loading]);
 
-  const validPoints = useMemo(() => points.filter((p) => typeof p.latitude === "number" && typeof p.longitude === "number" && !isNaN(p.latitude) && !isNaN(p.longitude)), [points]);
+  const validPoints = useMemo(() => points.filter((p) => {
+    const lat = Number(p.latitude);
+    const lng = Number(p.longitude);
+    return typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng) && isFinite(lat) && isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat === 0 && lng === 0);
+  }), [points]);
+
+  const invalidCount = points.length - validPoints.length;
 
   const filtered = useMemo(() => {
     if (!search) return validPoints;
@@ -314,6 +320,12 @@ export function AdminCarte() {
                     <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
                     <span className="text-xs font-bold text-gray-900">{totalVisible}</span>
                   </div>
+                  {invalidCount > 0 && (
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-xs text-warning-600">GPS indisponible</span>
+                      <span className="text-xs font-bold text-warning-600">{invalidCount}</span>
+                    </div>
+                  )}
                 </>
               )}
             </div>

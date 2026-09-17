@@ -383,6 +383,79 @@ export interface TeamStats {
   }[];
 }
 
+export type TourneeStatut = "a_venir" | "en_cours" | "terminee" | "annulee";
+
+export interface Tournee {
+  id: string;
+  nom: string;
+  code: string;
+  color_code: string;
+  actif: boolean;
+  total_points_vente: number;
+  points_visites: number;
+  points_restants: number;
+  visites: number;
+  ventes_realisees: number;
+  ventes_non_realisees: number;
+  promesses: number;
+  livraisons: number;
+  bl_total: number;
+  statut: TourneeStatut;
+}
+
+export interface TourneePoint {
+  id: string;
+  code: string;
+  name: string;
+  address: string;
+  city: string;
+  telephone: string | null;
+  latitude: number;
+  longitude: number;
+  visite: {
+    visited_at: string;
+    vente_status: VenteStatus;
+    status: string;
+    motif: string | null;
+  } | null;
+  vente_realisee: boolean;
+  bl: { id: string; numero: string; statut: string; date_livraison: string | null } | null;
+}
+
+export interface TourneeDetail {
+  secteur: Secteur;
+  points: TourneePoint[];
+  stats: {
+    total: number;
+    visites: number;
+    restants: number;
+    ventes: number;
+    bl_livres: number;
+    bl_en_attente: number;
+  };
+}
+
+export interface MesPointVente {
+  id: string;
+  code: string;
+  name: string;
+  address: string;
+  city: string;
+  telephone: string | null;
+  latitude: number;
+  longitude: number;
+  secteur_nom: string | null;
+  secteur_code: string | null;
+  secteur_color: string | null;
+  derniere_visite: string | null;
+  derniere_vente: string | null;
+  vente_status: VenteStatus | null;
+  statut: "visite" | "non_visite";
+  commande_code?: string | null;
+  commande_statut?: string | null;
+  date_livraison?: string | null;
+}
+
 export interface VisitResult {
   status: "confirmed" | "out_of_zone" | "duplicate" | "poor_gps";
   distance?: number;

@@ -1021,20 +1021,14 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- POINTS DE VENTE CRUD ---
     if (path === "/points-vente" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
-      let query = supabase.from("points_vente").select("*").order("created_at", { ascending: false });
+      let query = supabase.from("points_vente").select("*, secteur:secteurs(id, nom, code, color_code)").order("created_at", { ascending: false });
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
-      const enriched = await Promise.all((data || []).map(async (p: Record<string, unknown>) => {
-        let secteur_nom = null;
-        if (p.secteur_id) {
-          let secQuery = supabase.from("secteurs").select("nom").eq("id", p.secteur_id);
-          if (effectiveTeamId) secQuery = secQuery.eq("team_id", effectiveTeamId);
-          const { data: sec } = await secQuery.maybeSingle();
-          secteur_nom = sec?.nom ?? null;
-        }
-        return { ...p, secteur_nom };
-      }));
+      const enriched = (data || []).map((p: Record<string, unknown>) => {
+        const secteur = p.secteur as Record<string, unknown> | null;
+        return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null };
+      });
       return jsonResponse(enriched);
     }
     if (path === "/points-vente" && method === "POST") {
@@ -1912,6 +1906,217 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonResponse(secteurs);
     }
 
+    // --- MES TOURNEES (commercial + superviseur) ---
+    if (path === "/mes-tournees" && method === "GET") {
+      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
+      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
+      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId);
+      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
+      const { data: assignmentRows } = await assignments;
+      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
+      if (secteurIds.length === 0) return jsonResponse([]);
+      let secteurQuery = supabase.from("secteurs").select("*").in("id", secteurIds).order("nom", { ascending: true });
+      if (userTeamId) secteurQuery = secteurQuery.eq("team_id", userTeamId);
+      const { data: secteurs, error: sErr } = await secteurQuery;
+      if (sErr) return jsonError(500, "Erreur de lecture");
+      // For each secteur, count PVs and visits
+      const result = await Promise.all((secteurs || []).map(async (sec: Record<string, unknown>) => {
+        const secId = String(sec.id);
+        let pvQ = supabase.from("points_vente").select("id", { count: "exact", head: true }).eq("secteur_id", secId);
+        if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
+        const { count: totalPv } = await pvQ;
+
+        let visQ = supabase.from("visites").select("id, vente_status, visited_at", { count: "exact" }).eq("secteur_id", secId);
+        if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
+        else visQ = visQ.eq("superviseur_id", userId);
+        if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
+        const { data: visites } = await visQ;
+
+        const visList = visites || [];
+        const visitedPvIds = new Set(visList.map((v: Record<string, unknown>) => v.point_vente_id));
+        const ventesRealisees = visList.filter((v: Record<string, unknown>) => v.vente_status === "vente_realisee" || v.vente_status === "vente_livraison").length;
+        const ventesNonRealisees = visList.filter((v: Record<string, unknown>) => v.vente_status === "vente_non_realisee").length;
+        const promesses = visList.filter((v: Record<string, unknown>) => v.vente_status === "promesse_achat").length;
+
+        // Livraisons for this secteur
+        let livQ = supabase.from("livraisons").select("id, statut_final", { count: "exact", head: true }).eq("secteur_id", secId);
+        if (userRole === "commercial") livQ = livQ.eq("commercial_id", userId);
+        if (userTeamId) livQ = livQ.eq("team_id", userTeamId);
+        const { count: livraisonsCount } = await livQ;
+
+        let blQ = supabase.from("bons_livraison").select("id, statut", { count: "exact", head: true }).eq("secteur_id", secId);
+        if (userRole === "commercial") blQ = blQ.eq("commercial_id", userId);
+        if (userTeamId) blQ = blQ.eq("team_id", userTeamId);
+        const { count: blCount } = await blQ;
+
+        const visitedCount = visitedPvIds.size;
+        const total = totalPv || 0;
+        const statut = visitedCount === 0 ? "a_venir" : visitedCount >= total ? "terminee" : "en_cours";
+
+        return {
+          id: secId,
+          nom: sec.nom,
+          code: sec.code,
+          color_code: sec.color_code,
+          actif: sec.actif,
+          total_points_vente: total,
+          points_visites: visitedCount,
+          points_restants: Math.max(0, total - visitedCount),
+          visites: visList.length,
+          ventes_realisees: ventesRealisees,
+          ventes_non_realisees: ventesNonRealisees,
+          promesses: promesses,
+          livraisons: livraisonsCount || 0,
+          bl_total: blCount || 0,
+          statut,
+        };
+      }));
+      return jsonResponse(result);
+    }
+
+    // --- TOURNEE DETAIL (commercial + superviseur) ---
+    if (path.startsWith("/tournee-detail/") && method === "GET") {
+      const secteurId = path.split("/")[2];
+      // Verify assignment
+      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
+      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
+      let assignQ = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId).eq("secteur_id", secteurId);
+      if (userTeamId) assignQ = assignQ.eq("team_id", userTeamId);
+      const { data: assignment } = await assignQ.maybeSingle();
+      if (!assignment) return jsonError(403, "Cette tournée ne vous est pas affectée");
+
+      let secQ = supabase.from("secteurs").select("*").eq("id", secteurId);
+      if (userTeamId) secQ = secQ.eq("team_id", userTeamId);
+      const { data: secteur } = await secQ.maybeSingle();
+      if (!secteur) return jsonError(404, "Tournée introuvable");
+
+      let pvQ = supabase.from("points_vente").select("id, code, name, address, city, telephone, latitude, longitude, secteur_id").eq("secteur_id", secteurId);
+      if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
+      const { data: points } = await pvQ;
+
+      const pvIds = (points || []).map((p: Record<string, unknown>) => p.id);
+      let visQ = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status, status, motif, user_role").in("point_vente_id", pvIds).order("visited_at", { ascending: false });
+      if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
+      else visQ = visQ.eq("superviseur_id", userId);
+      if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
+      const { data: visites } = await visQ;
+
+      let ventQ = supabase.from("ventes").select("id, point_vente_id, created_at").in("point_vente_id", pvIds);
+      if (userRole === "commercial") ventQ = ventQ.eq("commercial_id", userId);
+      else ventQ = ventQ.eq("superviseur_id", userId);
+      if (userTeamId) ventQ = ventQ.eq("team_id", userTeamId);
+      const { data: ventes } = await ventQ;
+
+      let blQ = supabase.from("bons_livraison").select("id, numero, point_vente_id, statut, date_livraison").in("point_vente_id", pvIds);
+      if (userRole === "commercial") blQ = blQ.eq("commercial_id", userId);
+      else blQ = blQ.eq("superviseur_id", userId);
+      if (userTeamId) blQ = blQ.eq("team_id", userTeamId);
+      const { data: bls } = await blQ;
+
+      const visByPv = new Map<string, Record<string, unknown>>();
+      for (const v of (visites || []) as Record<string, unknown>[]) {
+        const pvId = String(v.point_vente_id);
+        if (!visByPv.has(pvId)) visByPv.set(pvId, v);
+      }
+      const venteByPv = new Set((ventes || []).map((v: Record<string, unknown>) => String(v.point_vente_id)));
+      const blByPv = new Map<string, Record<string, unknown>>();
+      for (const bl of (bls || []) as Record<string, unknown>[]) {
+        blByPv.set(String(bl.point_vente_id), bl);
+      }
+
+      const enrichedPoints = (points || []).map((p: Record<string, unknown>) => {
+        const pId = String(p.id);
+        const lastVisite = visByPv.get(pId);
+        return {
+          ...p,
+          visite: lastVisite ? {
+            visited_at: lastVisite.visited_at,
+            vente_status: lastVisite.vente_status,
+            status: lastVisite.status,
+            motif: lastVisite.motif,
+          } : null,
+          vente_realisee: venteByPv.has(pId),
+          bl: blByPv.get(pId) || null,
+        };
+      });
+
+      return jsonResponse({
+        secteur,
+        points: enrichedPoints,
+        stats: {
+          total: enrichedPoints.length,
+          visites: enrichedPoints.filter((p) => p.visite).length,
+          restants: enrichedPoints.filter((p) => !p.visite).length,
+          ventes: venteByPv.size,
+          bl_livres: (bls || []).filter((b: Record<string, unknown>) => b.statut === "livre").length,
+          bl_en_attente: (bls || []).filter((b: Record<string, unknown>) => b.statut === "en_attente").length,
+        },
+      });
+    }
+
+    // --- MES POINTS DE VENTE (commercial + superviseur) ---
+    if (path === "/mes-points-vente" && method === "GET") {
+      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
+      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
+      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId);
+      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
+      const { data: assignmentRows } = await assignments;
+      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
+      if (secteurIds.length === 0) return jsonResponse([]);
+
+      let pvQ = supabase.from("points_vente")
+        .select("id, code, name, address, city, telephone, latitude, longitude, secteur_id, secteur:secteurs(nom, code, color_code)")
+        .in("secteur_id", secteurIds)
+        .order("name", { ascending: true });
+      if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
+      const { data: points, error: pvErr } = await pvQ;
+      if (pvErr) return jsonError(500, "Erreur de lecture");
+
+      const pvIds = (points || []).map((p: Record<string, unknown>) => p.id);
+      let visQ = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status").in("point_vente_id", pvIds).order("visited_at", { ascending: false });
+      if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
+      else visQ = visQ.eq("superviseur_id", userId);
+      if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
+      const { data: visites } = await visQ;
+
+      let ventQ = supabase.from("ventes").select("id, point_vente_id, created_at").in("point_vente_id", pvIds);
+      if (userRole === "commercial") ventQ = ventQ.eq("commercial_id", userId);
+      else ventQ = ventQ.eq("superviseur_id", userId);
+      if (userTeamId) ventQ = ventQ.eq("team_id", userTeamId);
+      const { data: ventes } = await ventQ;
+
+      const visByPv = new Map<string, Record<string, unknown>>();
+      for (const v of (visites || []) as Record<string, unknown>[]) {
+        const pvId = String(v.point_vente_id);
+        if (!visByPv.has(pvId)) visByPv.set(pvId, v);
+      }
+      const venteByPv = new Set((ventes || []).map((v: Record<string, unknown>) => String(v.point_vente_id)));
+
+      const enriched = (points || []).map((p: Record<string, unknown>) => {
+        const pId = String(p.id);
+        const lastVisite = visByPv.get(pId);
+        const secteur = p.secteur as Record<string, unknown> | null;
+        return {
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          address: p.address,
+          city: p.city,
+          telephone: p.telephone,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          secteur_nom: secteur?.nom ?? null,
+          secteur_code: secteur?.code ?? null,
+          secteur_color: secteur?.color_code ?? null,
+          derniere_visite: lastVisite?.visited_at ?? null,
+          derniere_vente: venteByPv.has(pId) ? (ventes || []).find((v: Record<string, unknown>) => String(v.point_vente_id) === pId)?.created_at ?? null : null,
+          vente_status: lastVisite?.vente_status ?? null,
+          statut: lastVisite ? "visite" : "non_visite",
+        };
+      });
+      return jsonResponse(enriched);
+    }
+
     // --- CREATE POINT DE VENTE (field users) ---
     if (path === "/points-vente" && method === "POST") {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
@@ -2130,6 +2335,89 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de recherche");
       return jsonResponse(data);
+    }
+
+    // --- MES TOURNEES (agent livreur) ---
+    if (path === "/mes-tournees" && method === "GET") {
+      // Agent livreur sees commandes grouped by secteur
+      let cmdQ = supabase
+        .from("commandes")
+        .select(`id, code, statut, secteur_id, point_vente_id, created_at,
+          point_vente:points_vente(name, city, address)`)
+        .eq("agent_livreur_id", userId)
+        .order("created_at", { ascending: false });
+      if (userTeamId) cmdQ = cmdQ.eq("team_id", userTeamId);
+      const { data: commandes, error: cmdErr } = await cmdQ;
+      if (cmdErr) return jsonError(500, "Erreur de lecture");
+
+      const secteurIds = [...new Set((commandes || []).map((c: Record<string, unknown>) => c.secteur_id).filter(Boolean))] as string[];
+      if (secteurIds.length === 0) return jsonResponse([]);
+
+      let secQ = supabase.from("secteurs").select("*").in("id", secteurIds).order("nom", { ascending: true });
+      if (userTeamId) secQ = secQ.eq("team_id", userTeamId);
+      const { data: secteurs } = await secQ;
+
+      const result = (secteurs || []).map((sec: Record<string, unknown>) => {
+        const secId = String(sec.id);
+        const secCmds = (commandes || []).filter((c: Record<string, unknown>) => c.secteur_id === secId);
+        const livrees = secCmds.filter((c: Record<string, unknown>) => c.statut === "livree").length;
+        const enCours = secCmds.filter((c: Record<string, unknown>) => c.statut !== "livree" && c.statut !== "annulee").length;
+        return {
+          id: secId,
+          nom: sec.nom,
+          code: sec.code,
+          color_code: sec.color_code,
+          actif: sec.actif,
+          total_commandes: secCmds.length,
+          livrees,
+          en_cours: enCours,
+          restantes: Math.max(0, secCmds.length - livrees),
+          statut: livrees === 0 ? "a_venir" : livrees >= secCmds.length ? "terminee" : "en_cours",
+        };
+      });
+      return jsonResponse(result);
+    }
+
+    // --- MES POINTS DE VENTE (agent livreur) ---
+    if (path === "/mes-points-vente" && method === "GET") {
+      let cmdQ = supabase
+        .from("commandes")
+        .select(`id, code, statut, date_livraison, point_vente_id, secteur_id,
+          point_vente:points_vente(id, code, name, address, city, telephone, latitude, longitude, secteur:secteurs(nom, code, color_code))`)
+        .eq("agent_livreur_id", userId)
+        .order("created_at", { ascending: false });
+      if (userTeamId) cmdQ = cmdQ.eq("team_id", userTeamId);
+      const { data: commandes, error: cmdErr } = await cmdQ;
+      if (cmdErr) return jsonError(500, "Erreur de lecture");
+
+      const seen = new Set<string>();
+      const points: Record<string, unknown>[] = [];
+      for (const cmd of (commandes || []) as Record<string, unknown>[]) {
+        const pv = cmd.point_vente as Record<string, unknown> | null;
+        if (!pv) continue;
+        const pvId = String(pv.id);
+        if (seen.has(pvId)) continue;
+        seen.add(pvId);
+        const secteur = pv.secteur as Record<string, unknown> | null;
+        points.push({
+          id: pv.id,
+          code: pv.code,
+          name: pv.name,
+          address: pv.address,
+          city: pv.city,
+          telephone: pv.telephone,
+          latitude: pv.latitude,
+          longitude: pv.longitude,
+          secteur_nom: secteur?.nom ?? null,
+          secteur_code: secteur?.code ?? null,
+          secteur_color: secteur?.color_code ?? null,
+          commande_code: cmd.code,
+          commande_statut: cmd.statut,
+          date_livraison: cmd.date_livraison,
+          statut: cmd.statut === "livree" ? "livre" : "en_attente",
+        });
+      }
+      return jsonResponse(points);
     }
   }
 

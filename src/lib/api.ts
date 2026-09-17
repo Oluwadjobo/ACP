@@ -429,4 +429,11 @@ export const api = {
 
   listHistoriqueLivraisons: () =>
     apiRequest<{ id: string; commande_id: string; statut_final: string; date_livraison: string; commentaire: string | null; created_at: string; commande?: { code: string }; point_vente?: { name: string; city: string; address: string }; commercial?: { full_name: string } }[]>("/historique-livraisons", { method: "GET" }),
+
+  // Field - Mes tournées
+  mesTournees: () => apiRequest<import("@/types").Tournee[]>("/mes-tournees", { method: "GET" }),
+
+  tourneeDetail: (secteurId: string) => apiRequest<import("@/types").TourneeDetail>(`/tournee-detail/${secteurId}`, { method: "GET" }),
+
+  mesPointsVente: () => apiRequest<import("@/types").MesPointVente[]>("/mes-points-vente", { method: "GET" }),
 };
