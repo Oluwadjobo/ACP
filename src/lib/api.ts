@@ -233,7 +233,13 @@ export const api = {
     method: "GET",
   }),
 
-  getTeamStats: () => apiRequest<import("@/types").TeamStats>("/team-stats", { method: "GET" }),
+  getTeamStats: (params?: { date_start?: string; date_end?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.date_start) qs.set("date_start", params.date_start);
+    if (params?.date_end) qs.set("date_end", params.date_end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiRequest<import("@/types").TeamStats>(`/team-stats${suffix}`, { method: "GET" });
+  },
 
   listVisites: (page = 1, pageSize = 50) =>
     apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(

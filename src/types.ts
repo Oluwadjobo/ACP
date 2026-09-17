@@ -208,6 +208,7 @@ export interface PointVente {
   qr_token: string;
   secteur_id?: string | null;
   secteur_nom?: string | null;
+  secteur_color?: string | null;
   team_id?: string | null;
   frigo_comtesse?: boolean | null;
   commercial_nom?: string | null;
@@ -351,6 +352,13 @@ export interface TeamStats {
     commandes: number;
     livraisons: number;
     controles: number;
+    points_vente_visites: number;
+    visites_non_validees: number;
+    bl_en_attente: number;
+    bl_livres: number;
+    bl_partiels: number;
+    bl_annules: number;
+    promesses: number;
   };
   commerciaux: {
     id: string;

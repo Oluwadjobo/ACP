@@ -131,7 +131,17 @@ export function AdminPointsVente() {
                     <span className="truncate">{p.address}, {p.city}</span>
                   </p>
                   <p className="text-gray-400">GPS: {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}</p>
-                  {p.secteur_nom && <span className="badge bg-primary-50 text-primary-600">{p.secteur_nom}</span>}
+                  {p.secteur_nom && (
+                    <span
+                      className="badge"
+                      style={{
+                        backgroundColor: p.secteur_color ? p.secteur_color + "20" : undefined,
+                        color: p.secteur_color || undefined,
+                      }}
+                    >
+                      {p.secteur_nom}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button onClick={() => setQrModal(p)} className="btn-secondary flex-1 text-xs py-2">

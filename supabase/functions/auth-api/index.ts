@@ -1422,16 +1422,32 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/team-stats" && method === "GET") {
       { const denied = requireAnyAdminPermission("view_dashboard"); if (denied) return denied; }
 
+      const dateStart = url.searchParams.get("date_start");
+      const dateEnd = url.searchParams.get("date_end");
+      const hasPeriod = !!dateStart || !!dateEnd;
+      const startIso = dateStart ? new Date(dateStart + "T00:00:00").toISOString() : null;
+      const endIso = dateEnd ? new Date(dateEnd + "T23:59:59").toISOString() : null;
+
+      function applyDateFilter<T extends { gte?: string; lte?: string; visited_at?: string; created_at?: string }>(q: T, dateField: string): T {
+        if (startIso) q = q.gte(dateField, startIso) as T;
+        if (endIso) q = q.lte(dateField, endIso) as T;
+        return q;
+      }
+
       let comQuery = supabase.from("commerciaux").select("id, full_name, active");
       if (effectiveTeamId) comQuery = comQuery.eq("team_id", effectiveTeamId);
       const { data: commerciaux } = await comQuery;
 
-      let visQuery = supabase.from("visites").select("commercial_id, superviseur_id, point_vente_id, vente_status");
+      let visQuery = supabase.from("visites").select("id, commercial_id, superviseur_id, point_vente_id, vente_status, visited_at, status");
       if (effectiveTeamId) visQuery = visQuery.eq("team_id", effectiveTeamId);
+      if (startIso) visQuery = visQuery.gte("visited_at", startIso);
+      if (endIso) visQuery = visQuery.lte("visited_at", endIso);
       const { data: visites } = await visQuery;
 
-      let ventQuery = supabase.from("ventes").select("id, commercial_id, superviseur_id");
+      let ventQuery = supabase.from("ventes").select("id, commercial_id, superviseur_id, created_at");
       if (effectiveTeamId) ventQuery = ventQuery.eq("team_id", effectiveTeamId);
+      if (startIso) ventQuery = ventQuery.gte("created_at", startIso);
+      if (endIso) ventQuery = ventQuery.lte("created_at", endIso);
       const { data: ventes } = await ventQuery;
 
       let pvQuery = supabase.from("points_vente").select("id", { count: "exact", head: true });
@@ -1442,25 +1458,45 @@ async function handleRoute(req: Request): Promise<Response> {
       if (effectiveTeamId) alQuery = alQuery.eq("team_id", effectiveTeamId);
       const { data: agentsLivreur } = await alQuery;
 
-      let cmdQuery = supabase.from("commandes").select("agent_livreur_id, commercial_id, statut, point_vente_id");
+      let cmdQuery = supabase.from("commandes").select("agent_livreur_id, commercial_id, statut, point_vente_id, created_at");
       if (effectiveTeamId) cmdQuery = cmdQuery.eq("team_id", effectiveTeamId);
+      if (startIso) cmdQuery = cmdQuery.gte("created_at", startIso);
+      if (endIso) cmdQuery = cmdQuery.lte("created_at", endIso);
       const { data: commandes } = await cmdQuery;
 
-      let livQuery = supabase.from("livraisons").select("agent_livreur_id, point_vente_id");
+      let livQuery = supabase.from("livraisons").select("agent_livreur_id, point_vente_id, created_at");
       if (effectiveTeamId) livQuery = livQuery.eq("team_id", effectiveTeamId);
+      if (startIso) livQuery = livQuery.gte("created_at", startIso);
+      if (endIso) livQuery = livQuery.lte("created_at", endIso);
       const { data: livraisons } = await livQuery;
 
       let supQuery = supabase.from("superviseurs").select("id, full_name, active");
       if (effectiveTeamId) supQuery = supQuery.eq("team_id", effectiveTeamId);
       const { data: superviseurs } = await supQuery;
 
-      let ctrlQuery = supabase.from("controles_terrain").select("superviseur_id");
+      let ctrlQuery = supabase.from("controles_terrain").select("superviseur_id, created_at");
       if (effectiveTeamId) ctrlQuery = ctrlQuery.eq("team_id", effectiveTeamId);
+      if (startIso) ctrlQuery = ctrlQuery.gte("created_at", startIso);
+      if (endIso) ctrlQuery = ctrlQuery.lte("created_at", endIso);
       const { data: controles } = await ctrlQuery;
 
-      let pvCreatedQuery = supabase.from("points_vente").select("id, created_by, created_by_role");
+      let pvCreatedQuery = supabase.from("points_vente").select("id, created_by, created_by_role, created_at");
       if (effectiveTeamId) pvCreatedQuery = pvCreatedQuery.eq("team_id", effectiveTeamId);
+      if (startIso) pvCreatedQuery = pvCreatedQuery.gte("created_at", startIso);
+      if (endIso) pvCreatedQuery = pvCreatedQuery.lte("created_at", endIso);
       const { data: pvCreated } = await pvCreatedQuery;
+
+      let promQuery = supabase.from("promesses_achat").select("id, created_at");
+      if (effectiveTeamId) promQuery = promQuery.eq("team_id", effectiveTeamId);
+      if (startIso) promQuery = promQuery.gte("created_at", startIso);
+      if (endIso) promQuery = promQuery.lte("created_at", endIso);
+      const { count: promesseCount } = await promQuery;
+
+      let blQuery = supabase.from("bons_livraison").select("id, statut, created_at");
+      if (effectiveTeamId) blQuery = blQuery.eq("team_id", effectiveTeamId);
+      if (startIso) blQuery = blQuery.gte("created_at", startIso);
+      if (endIso) blQuery = blQuery.lte("created_at", endIso);
+      const { data: bls } = await blQuery;
 
       const commercialStats = (commerciaux || []).map((c: Record<string, unknown>) => {
         const cId = String(c.id);
@@ -1517,14 +1553,24 @@ async function handleRoute(req: Request): Promise<Response> {
         };
       });
 
+      const allVisitedPvIds = new Set((visites || []).map((v: Record<string, unknown>) => v.point_vente_id).filter(Boolean) as string[]);
+      const visitesNonValidees = (visites || []).filter((v: Record<string, unknown>) => v.status === "out_of_zone").length;
+
       return jsonResponse({
         totals: {
-          points_vente: pvCount || 0,
+          points_vente: hasPeriod ? allVisitedPvIds.size : (pvCount || 0),
+          points_vente_visites: allVisitedPvIds.size,
           visites: visites?.length || 0,
+          visites_non_validees: visitesNonValidees,
           ventes: ventes?.length || 0,
           commandes: commandes?.length || 0,
           livraisons: livraisons?.length || 0,
           controles: controles?.length || 0,
+          promesses: promesseCount || 0,
+          bl_en_attente: (bls || []).filter((b: Record<string, unknown>) => b.statut === "en_attente").length,
+          bl_livres: (bls || []).filter((b: Record<string, unknown>) => b.statut === "livre").length,
+          bl_partiels: (bls || []).filter((b: Record<string, unknown>) => b.statut === "partiel").length,
+          bl_annules: (bls || []).filter((b: Record<string, unknown>) => b.statut === "annule").length,
         },
         commerciaux: commercialStats,
         agents_livreur: agentStats,
