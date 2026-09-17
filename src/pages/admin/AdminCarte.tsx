@@ -318,7 +318,11 @@ export function AdminCarte() {
                   </div>
                   <div className="mt-2 pt-2 border-t border-gray-200 flex items-center justify-between">
                     <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
-                    <span className="text-xs font-bold text-gray-900">{totalVisible}</span>
+                    <span className="text-xs font-bold text-gray-900">{points.length}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-xs text-gray-500">Affichés sur la carte</span>
+                    <span className="text-xs font-medium text-gray-500">{totalVisible}</span>
                   </div>
                   {invalidCount > 0 && (
                     <div className="mt-1 flex items-center justify-between">
