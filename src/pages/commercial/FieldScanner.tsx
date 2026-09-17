@@ -14,7 +14,7 @@ type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | 
 type VenteLigneForm = { produit_id: string; produit_nom: string; quantite: number; observation: string };
 
 export function FieldScanner() {
-  const { fullName, userType, hasPermission } = useAuth();
+  const { fullName, userType, hasPermission, logout } = useAuth();
   const navigate = useNavigate();
   const isSuperviseur = userType === "superviseur";
 
@@ -663,7 +663,7 @@ export function FieldScanner() {
       </main>
 
       <footer className="px-4 py-3 border-t border-gray-100 bg-white">
-        <button onClick={() => { stopCamera(); localStorage.removeItem("session_token"); window.location.href = "/"; }} className="btn-ghost w-full text-gray-500 text-sm">Se déconnecter</button>
+        <button onClick={async () => { stopCamera(); await logout(); window.location.href = "/"; }} className="btn-ghost w-full text-gray-500 text-sm">Se déconnecter</button>
       </footer>
       <CreatePointVenteModal open={showCreateModal} onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); reset(); }} />
     </div>

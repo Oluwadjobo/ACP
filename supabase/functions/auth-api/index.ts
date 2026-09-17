@@ -228,28 +228,46 @@ async function checkPassword(password: string, stored: string, table: string, id
 
 // ============ LOGIN RATE LIMITING ============
 
+// A search term is interpolated into a PostgREST filter expression, where a comma
+// starts a new condition and a dot separates column from operator. Stripping the
+// grammar characters keeps the caller from adding conditions of their own.
+function sanitizeSearchTerm(raw: string): string {
+  return raw.replace(/[,.()"'\\*:%]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function getClientIp(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim().slice(0, 64);
   return req.headers.get("cf-connecting-ip")?.slice(0, 64) || "unknown";
 }
 
-async function isLoginLocked(identifier: string, ip: string): Promise<boolean> {
+// The per-IP counter is keyed on a header the caller controls, so it is paired with
+// a counter scoped to the identifier alone under a reserved `ip` value. Rotating
+// X-Forwarded-For no longer resets the guessing budget for a given account.
+const IDENTIFIER_SCOPE = "__identifier__";
+const LOGIN_MAX_ATTEMPTS_PER_IDENTIFIER = 30;
+
+async function isScopeLocked(identifier: string, ip: string): Promise<boolean> {
   const { data } = await supabase.from("login_attempts")
     .select("locked_until").eq("identifier", identifier).eq("ip", ip).maybeSingle();
   if (!data?.locked_until) return false;
   return new Date(data.locked_until).getTime() > Date.now();
 }
 
-async function recordLoginFailure(identifier: string, ip: string): Promise<void> {
+async function isLoginLocked(identifier: string, ip: string): Promise<boolean> {
+  if (await isScopeLocked(identifier, ip)) return true;
+  return await isScopeLocked(identifier, IDENTIFIER_SCOPE);
+}
+
+async function bumpLoginFailure(identifier: string, ip: string, maxAttempts: number): Promise<void> {
   const now = Date.now();
   const windowMs = LOGIN_WINDOW_MINUTES * 60 * 1000;
   const { data } = await supabase.from("login_attempts")
     .select("id, attempts, first_attempt").eq("identifier", identifier).eq("ip", ip).maybeSingle();
   if (!data) {
-    await supabase.from("login_attempts").insert({
+    await supabase.from("login_attempts").upsert({
       identifier, ip, attempts: 1, first_attempt: new Date(now).toISOString(),
-    });
+    }, { onConflict: "identifier,ip" });
     return;
   }
   const withinWindow = new Date(data.first_attempt).getTime() > now - windowMs;
@@ -257,14 +275,19 @@ async function recordLoginFailure(identifier: string, ip: string): Promise<void>
   const updates: Record<string, unknown> = {
     attempts,
     updated_at: new Date(now).toISOString(),
-    locked_until: attempts >= LOGIN_MAX_ATTEMPTS ? new Date(now + windowMs).toISOString() : null,
+    locked_until: attempts >= maxAttempts ? new Date(now + windowMs).toISOString() : null,
   };
   if (!withinWindow) updates.first_attempt = new Date(now).toISOString();
   await supabase.from("login_attempts").update(updates).eq("id", data.id);
 }
 
+async function recordLoginFailure(identifier: string, ip: string): Promise<void> {
+  await bumpLoginFailure(identifier, ip, LOGIN_MAX_ATTEMPTS);
+  await bumpLoginFailure(identifier, IDENTIFIER_SCOPE, LOGIN_MAX_ATTEMPTS_PER_IDENTIFIER);
+}
+
 async function clearLoginFailures(identifier: string, ip: string): Promise<void> {
-  await supabase.from("login_attempts").delete().eq("identifier", identifier).eq("ip", ip);
+  await supabase.from("login_attempts").delete().eq("identifier", identifier).in("ip", [ip, IDENTIFIER_SCOPE]);
 }
 
 function generateToken(): string {
@@ -1645,6 +1668,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- FINALIZE VISIT ---
     if (path === "/visites/finalize" && method === "POST") {
+      const denied = requirePermission("scan"); if (denied) return denied;
       const { visite_id, vente_status, motif } = await req.json();
       if (!visite_id || !vente_status) return jsonError(400, "Visite et statut de vente requis");
       const validStatuses = ["vente_realisee", "vente_non_realisee"];
@@ -1679,8 +1703,8 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- CREATE VENTE (with multi-product lignes + auto BL) ---
     if (path === "/ventes" && method === "POST") {
       const denied = requirePermission("record_vente"); if (denied) return denied;
-      const { visite_id, point_vente_id, lignes, livraison_immediate, observation } = await req.json();
-      if (!visite_id || !point_vente_id || !Array.isArray(lignes) || lignes.length === 0)
+      const { visite_id, point_vente_id: bodyPointVenteId, lignes, livraison_immediate, observation } = await req.json();
+      if (!visite_id || !bodyPointVenteId || !Array.isArray(lignes) || lignes.length === 0)
         return jsonError(400, "Visite, point de vente et au moins une ligne de produit requis");
 
       for (const l of lignes) {
@@ -1702,10 +1726,16 @@ async function handleRoute(req: Request): Promise<Response> {
 
       const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
       if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: visite } = await supabase.from("visites").select("id, status").match(ownerFilter).maybeSingle();
+      const { data: visite } = await supabase.from("visites").select("id, status, point_vente_id").match(ownerFilter).maybeSingle();
       if (!visite) return jsonError(404, "Visite introuvable");
       if (visite.status !== "confirmed") {
         return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
+      }
+      // The sale belongs to the point de vente whose presence was actually proven by the
+      // visit, never to one named by the caller.
+      const point_vente_id = String(visite.point_vente_id);
+      if (String(bodyPointVenteId) !== point_vente_id) {
+        return jsonError(409, "Ce point de vente ne correspond pas à celui de la visite.");
       }
       const { data: venteExistante } = await supabase.from("ventes").select("id").eq("visite_id", visite_id).maybeSingle();
       if (venteExistante) return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
@@ -1774,14 +1804,19 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- CREATE PROMESSE D'ACHAT (superviseur only) ---
     if (path === "/promesses" && method === "POST" && userRole === "superviseur") {
       const denied = requirePermission("create_promesse"); if (denied) return denied;
-      const { visite_id, point_vente_id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations } = await req.json();
-      if (!visite_id || !point_vente_id || !produits) return jsonError(400, "Visite, point de vente et produits requis");
-      let visQuery = supabase.from("visites").select("id, status, vente_status").eq("id", visite_id).eq("superviseur_id", userId);
+      const { visite_id, point_vente_id: bodyPointVenteId, produits, quantite, date_previsionnelle, montant_estime, responsable, observations } = await req.json();
+      if (!visite_id || !bodyPointVenteId || !produits) return jsonError(400, "Visite, point de vente et produits requis");
+      let visQuery = supabase.from("visites").select("id, status, vente_status, point_vente_id").eq("id", visite_id).eq("superviseur_id", userId);
       if (userTeamId) visQuery = visQuery.eq("team_id", userTeamId);
       const { data: visite } = await visQuery.maybeSingle();
       if (!visite) return jsonError(404, "Visite introuvable");
       if (visite.status !== "confirmed") return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
       if (visite.vente_status !== "confirmed") return jsonError(409, "Cette visite a déjà été finalisée.");
+      // The promise is filed against the visited point de vente, not one named by the caller.
+      const point_vente_id = String(visite.point_vente_id);
+      if (String(bodyPointVenteId) !== point_vente_id) {
+        return jsonError(409, "Ce point de vente ne correspond pas à celui de la visite.");
+      }
       await supabase.from("visites").update({ vente_status: "promesse_achat" })
         .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed");
       const insertData: Record<string, unknown> = {
@@ -1807,9 +1842,18 @@ async function handleRoute(req: Request): Promise<Response> {
       if (userTeamId) pvCheck = pvCheck.eq("team_id", userTeamId);
       const { data: pvExists } = await pvCheck.maybeSingle();
       if (!pvExists) return jsonError(404, "Point de vente introuvable");
+      // A control may only be attached to a visit the caller actually made.
+      let linkedVisiteId: string | null = null;
+      if (visite_id) {
+        let visCheck = supabase.from("visites").select("id").eq("id", visite_id).eq("superviseur_id", userId);
+        if (userTeamId) visCheck = visCheck.eq("team_id", userTeamId);
+        const { data: ownVisite } = await visCheck.maybeSingle();
+        if (!ownVisite) return jsonError(404, "Visite introuvable");
+        linkedVisiteId = String(ownVisite.id);
+      }
       const secteur_id = pvExists.secteur_id || await getSuperviseurSecteur(userId, userTeamId);
       const insertData: Record<string, unknown> = {
-        superviseur_id: userId, point_vente_id, visite_id: visite_id || null, secteur_id,
+        superviseur_id: userId, point_vente_id, visite_id: linkedVisiteId, secteur_id,
         notation, presence_comtesse: !!presence_comtesse, disponibilite: !!disponibilite,
         visibilite: !!visibilite, merchandising: !!merchandising, presence_concurrents: !!presence_concurrents,
         commentaires: commentaires?.trim() || null, recommandations: recommandations?.trim() || null,
@@ -1885,7 +1929,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- SEARCH POINTS DE VENTE ---
     if (path === "/search-points-vente" && method === "GET") {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
-      const q = (url.searchParams.get("q") || "").trim();
+      const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")
@@ -2220,7 +2264,8 @@ async function handleRoute(req: Request): Promise<Response> {
       const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
       if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (userTeamId) insertData.team_id = userTeamId;
-      const { data, error } = await supabase.from("points_vente").insert(insertData).select("*").maybeSingle();
+      // The QR secret is deliberately left out of the response: a field user never needs it.
+      const { data, error } = await supabase.from("points_vente").insert(insertData).select("id, code, name, address, city, latitude, longitude, secteur_id, team_id, frigo_comtesse, created_by, created_by_role, created_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Code déjà existant"); return jsonError(500, "Erreur lors de la création"); }
       return jsonResponse(data, 201);
     }
@@ -2411,7 +2456,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- SEARCH POINTS DE VENTE (agent livreur) ---
     if (path === "/search-points-vente" && method === "GET") {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
-      const q = (url.searchParams.get("q") || "").trim();
+      const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")

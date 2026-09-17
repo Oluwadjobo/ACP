@@ -5,23 +5,38 @@ import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
 import type { PointVente, Secteur } from "@/types";
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeColor(value: unknown): string {
+  const c = String(value ?? "");
+  return /^#[0-9A-Fa-f]{3,8}$/.test(c) ? c : "#6B7280";
+}
+
 function createPinIcon(color: string): L.DivIcon {
   return L.divIcon({
     className: "",
-    html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;background:${color};border:2.5px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.4);transform:rotate(-45deg);"></div>`,
+    html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;background:${safeColor(color)};border:2.5px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,0.4);transform:rotate(-45deg);"></div>`,
     iconSize: [22, 22],
     iconAnchor: [11, 22],
   });
 }
 
 function createSelectedPinIcon(color: string, name: string): L.DivIcon {
-  const safe = name.replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const safe = escapeHtml(name);
+  const c = safeColor(color);
   return L.divIcon({
     className: "",
     html: `
       <div style="position:relative;transform:rotate(45deg);">
-        <div style="width:28px;height:28px;border-radius:50% 50% 50% 0;background:${color};border:3px solid #fff;box-shadow:0 0 0 3px ${color},0 4px 10px rgba(0,0,0,0.5);transform:rotate(-45deg);"></div>
-        <div style="position:absolute;bottom:100%;left:50%;transform:translateX(-50%) rotate(-45deg);white-space:nowrap;background:#fff;color:#1f2937;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.2);border:1.5px solid ${color};margin-bottom:4px;pointer-events:none;">${safe}</div>
+        <div style="width:28px;height:28px;border-radius:50% 50% 50% 0;background:${c};border:3px solid #fff;box-shadow:0 0 0 3px ${c},0 4px 10px rgba(0,0,0,0.5);transform:rotate(-45deg);"></div>
+        <div style="position:absolute;bottom:100%;left:50%;transform:translateX(-50%) rotate(-45deg);white-space:nowrap;background:#fff;color:#1f2937;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.2);border:1.5px solid ${c};margin-bottom:4px;pointer-events:none;">${safe}</div>
       </div>
     `,
     iconSize: [28, 28],
@@ -173,13 +188,13 @@ export function AdminCarte() {
         .bindPopup(
           `<div style="font-family:system-ui;padding:4px 2px;min-width:180px;">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-              <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;"></span>
-              <strong style="font-size:14px;color:#1f2937;">${p.name}</strong>
+              <span style="width:10px;height:10px;border-radius:50%;background:${safeColor(color)};display:inline-block;"></span>
+              <strong style="font-size:14px;color:#1f2937;">${escapeHtml(p.name)}</strong>
             </div>
-            <span style="font-size:12px;color:#6b7280;">${p.address}</span><br/>
-            <span style="font-size:12px;color:#6b7280;">${p.city}</span><br/>
-            <span style="font-size:11px;color:#9ca3af;">Code : ${p.code}</span>${p.secteur_nom ? `<br/><span style="font-size:11px;font-weight:600;color:${color};">Tournée : ${p.secteur_nom}</span>` : ""}
-            <a href="https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#0d1b5e;color:#fff;font-size:12px;font-weight:600;text-decoration:none;">📍 Y aller</a>
+            <span style="font-size:12px;color:#6b7280;">${escapeHtml(p.address)}</span><br/>
+            <span style="font-size:12px;color:#6b7280;">${escapeHtml(p.city)}</span><br/>
+            <span style="font-size:11px;color:#9ca3af;">Code : ${escapeHtml(p.code)}</span>${p.secteur_nom ? `<br/><span style="font-size:11px;font-weight:600;color:${safeColor(color)};">Tournée : ${escapeHtml(p.secteur_nom)}</span>` : ""}
+            <a href="https://www.google.com/maps/dir/?api=1&destination=${Number(p.latitude)},${Number(p.longitude)}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#0d1b5e;color:#fff;font-size:12px;font-weight:600;text-decoration:none;">📍 Y aller</a>
           </div>`
         );
       marker.on("click", () => setSelected(p));
