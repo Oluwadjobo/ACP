@@ -1021,7 +1021,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- POINTS DE VENTE CRUD ---
     if (path === "/points-vente" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
-      let query = supabase.from("points_vente").select("*, secteur:secteurs(id, nom, code, color_code)").order("created_at", { ascending: false });
+      let query = supabase.from("points_vente").select("*, secteur:secteurs!left(id, nom, code, color_code)").order("created_at", { ascending: false });
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
@@ -1810,7 +1810,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs(nom)")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs!left(nom)")
         .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
         .limit(20);
       if (userTeamId) query = query.eq("team_id", userTeamId);
@@ -2065,7 +2065,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (secteurIds.length === 0) return jsonResponse([]);
 
       let pvQ = supabase.from("points_vente")
-        .select("id, code, name, address, city, telephone, latitude, longitude, secteur_id, secteur:secteurs(nom, code, color_code)")
+        .select("id, code, name, address, city, telephone, latitude, longitude, secteur_id, secteur:secteurs!left(nom, code, color_code)")
         .in("secteur_id", secteurIds)
         .order("name", { ascending: true });
       if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
@@ -2328,7 +2328,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!q || q.length < 2) return jsonResponse([]);
       let query = supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs(nom)")
+        .select("id, code, name, address, city, latitude, longitude, telephone, secteur_id, secteur:secteurs!left(nom)")
         .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
         .limit(20);
       if (userTeamId) query = query.eq("team_id", userTeamId);
@@ -2383,7 +2383,7 @@ async function handleRoute(req: Request): Promise<Response> {
       let cmdQ = supabase
         .from("commandes")
         .select(`id, code, statut, date_livraison, point_vente_id, secteur_id,
-          point_vente:points_vente(id, code, name, address, city, telephone, latitude, longitude, secteur:secteurs(nom, code, color_code))`)
+          point_vente:points_vente(id, code, name, address, city, telephone, latitude, longitude, secteur:secteurs!left(nom, code, color_code))`)
         .eq("agent_livreur_id", userId)
         .order("created_at", { ascending: false });
       if (userTeamId) cmdQ = cmdQ.eq("team_id", userTeamId);
