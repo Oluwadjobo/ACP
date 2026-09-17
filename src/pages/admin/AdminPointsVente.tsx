@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
-import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation, Calendar, User } from "lucide-react";
 import { api } from "@/lib/api";
 import type { PointVente, Secteur } from "@/types";
 import { Modal } from "@/components/Modal";
@@ -131,6 +131,16 @@ export function AdminPointsVente() {
                     <span className="truncate">{p.address}, {p.city}</span>
                   </p>
                   <p className="text-gray-400">GPS: {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}</p>
+                  <p className="flex items-center gap-1.5">
+                    <Calendar size={12} className="flex-shrink-0" />
+                    <span>Créé le {new Date(p.created_at).toLocaleDateString("fr-FR")}</span>
+                  </p>
+                  {p.created_by_name && (
+                    <p className="flex items-center gap-1.5">
+                      <User size={12} className="flex-shrink-0" />
+                      <span>par {p.created_by_name}{p.created_by_role === "superviseur" ? " (Team Leader)" : ""}</span>
+                    </p>
+                  )}
                   {p.secteur_nom && (
                     <span
                       className="badge"

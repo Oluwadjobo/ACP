@@ -1045,10 +1045,22 @@ async function handleRoute(req: Request): Promise<Response> {
           if (commercial?.full_name && !commercialMap[sid]) commercialMap[sid] = String(commercial.full_name);
         }
       }
+      // Resolve created_by IDs to names
+      const creatorIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.created_by).filter(Boolean))] as string[];
+      let creatorMap: Record<string, string> = {};
+      if (creatorIds.length > 0) {
+        const { data: comCreators } = await supabase.from("commerciaux").select("id, full_name").in("id", creatorIds);
+        for (const c of (comCreators || []) as Record<string, unknown>[]) creatorMap[String(c.id)] = String(c.full_name);
+        const { data: supCreators } = await supabase.from("superviseurs").select("id, full_name").in("id", creatorIds);
+        for (const s of (supCreators || []) as Record<string, unknown>[]) creatorMap[String(s.id)] = String(s.full_name);
+        const { data: adminCreators } = await supabase.from("admins").select("id, full_name").in("id", creatorIds);
+        for (const a of (adminCreators || []) as Record<string, unknown>[]) creatorMap[String(a.id)] = String(a.full_name);
+      }
       const enriched = (points || []).map((p: Record<string, unknown>) => {
         const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
         const commercial_nom = p.secteur_id ? commercialMap[String(p.secteur_id)] ?? null : null;
-        return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null, commercial_nom };
+        const created_by_name = p.created_by ? creatorMap[String(p.created_by)] ?? null : null;
+        return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null, commercial_nom, created_by_name };
       });
       return jsonResponse(enriched);
     }
