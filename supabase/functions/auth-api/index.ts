@@ -1046,6 +1046,14 @@ async function handleRoute(req: Request): Promise<Response> {
       { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
       let pvQuery = supabase.from("points_vente").select("*").order("created_at", { ascending: false });
       if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
+      // Admin filters: active status, secteur, search by name/code/city
+      const activeFilter = url.searchParams.get("active");
+      if (activeFilter === "true") pvQuery = pvQuery.eq("active", true);
+      if (activeFilter === "false") pvQuery = pvQuery.eq("active", false);
+      const secteurFilter = url.searchParams.get("secteur_id");
+      if (secteurFilter) pvQuery = pvQuery.eq("secteur_id", secteurFilter);
+      const searchQ = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
+      if (searchQ) pvQuery = pvQuery.or(`name.ilike.%${searchQ}%,code.ilike.%${searchQ}%,city.ilike.%${searchQ}%`);
       const { data: points, error: pvError } = await pvQuery;
       if (pvError) return jsonError(500, "Erreur de lecture");
       const secteurIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.secteur_id).filter(Boolean))] as string[];
@@ -1091,6 +1099,14 @@ async function handleRoute(req: Request): Promise<Response> {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
+      // Anti-duplication: check for probable duplicates before creating
+      const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
+        p_name: name.trim(), p_team_id: effectiveTeamId,
+        p_latitude: Number(latitude), p_longitude: Number(longitude),
+      });
+      if (dups && dups.length > 0) {
+        return jsonError(409, JSON.stringify({ duplicates: dups }));
+      }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
       const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
@@ -1123,11 +1139,70 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path.startsWith("/points-vente/") && method === "DELETE") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const id = path.split("/")[2];
+      // Check if POS has history before deleting
+      const historyTables = ["visites", "ventes", "controles_terrain", "promesses_achat", "bons_livraison", "commandes", "livraisons"];
+      let hasHistory = false;
+      for (const tbl of historyTables) {
+        let hq = supabase.from(tbl).select("id", { count: "exact", head: true }).eq("point_vente_id", id);
+        if (effectiveTeamId) hq = hq.eq("team_id", effectiveTeamId);
+        const { count } = await hq;
+        if (count && count > 0) { hasHistory = true; break; }
+      }
+      if (hasHistory) {
+        return jsonError(409, "Ce point de vente possède un historique. Désactivez-le plutôt que de le supprimer.");
+      }
       let query = supabase.from("points_vente").delete().eq("id", id);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { error } = await query;
       if (error) return jsonError(500, "Erreur lors de la suppression");
       return jsonResponse({ success: true });
+    }
+    // --- BULK ACTIVATE/DEACTIVATE POINTS DE VENTE ---
+    if (path === "/points-vente/bulk" && method === "PUT") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      const { ids, active } = await req.json();
+      if (!Array.isArray(ids) || ids.length === 0) return jsonError(400, "Ids requis");
+      if (typeof active !== "boolean") return jsonError(400, "Le paramètre active est requis");
+      let query = supabase.from("points_vente").update({ active, updated_at: new Date().toISOString() }).in("id", ids);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { error } = await query;
+      if (error) return jsonError(500, "Erreur lors de la mise à jour");
+      return jsonResponse({ success: true, count: ids.length });
+    }
+    // --- BULK DELETE POINTS DE VENTE (only zero-history) ---
+    if (path === "/points-vente/bulk" && method === "DELETE") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      const { ids } = await req.json();
+      if (!Array.isArray(ids) || ids.length === 0) return jsonError(400, "Ids requis");
+      // Check each POS for history; refuse if any has history
+      const historyTables = ["visites", "ventes", "controles_terrain", "promesses_achat", "bons_livraison", "commandes", "livraisons"];
+      for (const id of ids) {
+        for (const tbl of historyTables) {
+          let hq = supabase.from(tbl).select("id", { count: "exact", head: true }).eq("point_vente_id", id);
+          if (effectiveTeamId) hq = hq.eq("team_id", effectiveTeamId);
+          const { count } = await hq;
+          if (count && count > 0) {
+            return jsonError(409, "Un ou plusieurs points de vente possèdent un historique. Désactivez-les plutôt.");
+          }
+        }
+      }
+      let query = supabase.from("points_vente").delete().in("id", ids);
+      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      const { error } = await query;
+      if (error) return jsonError(500, "Erreur lors de la suppression");
+      return jsonResponse({ success: true, count: ids.length });
+    }
+    // --- CHECK FOR DUPLICATES BEFORE CREATION ---
+    if (path === "/points-vente/check-duplicates" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      const { name, latitude, longitude } = await req.json();
+      if (!name) return jsonError(400, "Nom requis");
+      const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
+        p_name: name.trim(), p_team_id: effectiveTeamId,
+        p_latitude: latitude != null ? Number(latitude) : null,
+        p_longitude: longitude != null ? Number(longitude) : null,
+      });
+      return jsonResponse({ duplicates: dups || [] });
     }
 
     // --- DASHBOARD STATS ---
@@ -2259,6 +2334,14 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data: assignment, error: assignmentError } = await assignmentQuery.maybeSingle();
       if (assignmentError) return jsonError(500, "Erreur lors de la vérification de la tournée");
       if (!assignment) return jsonError(403, "Cette tournée ne vous est pas affectée");
+      // Anti-duplication: check for probable duplicates before creating
+      const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
+        p_name: name.trim(), p_team_id: userTeamId,
+        p_latitude: Number(latitude), p_longitude: Number(longitude),
+      });
+      if (dups && dups.length > 0) {
+        return jsonError(409, JSON.stringify({ duplicates: dups }));
+      }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
       const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };

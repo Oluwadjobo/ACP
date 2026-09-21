@@ -198,9 +198,14 @@ export const api = {
     apiRequest<{ success: boolean }>(`/produits/${id}`, { method: "DELETE" }),
 
   // Admin - Points de vente
-  listPointsVente: () => apiRequest<import("@/types").PointVente[]>("/points-vente", {
-    method: "GET",
-  }),
+  listPointsVente: (params?: { active?: boolean; secteur_id?: string; q?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.active !== undefined) qs.set("active", String(params.active));
+    if (params?.secteur_id) qs.set("secteur_id", params.secteur_id);
+    if (params?.q) qs.set("q", params.q);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiRequest<import("@/types").PointVente[]>(`/points-vente${suffix}`, { method: "GET" });
+  },
 
   createPointVente: (body: {
     name: string;
@@ -227,6 +232,24 @@ export const api = {
 
   deletePointVente: (id: string) =>
     apiRequest<{ success: boolean }>(`/points-vente/${id}`, { method: "DELETE" }),
+
+  bulkUpdatePointsVente: (ids: string[], active: boolean) =>
+    apiRequest<{ success: boolean; count: number }>("/points-vente/bulk", {
+      method: "PUT",
+      body: JSON.stringify({ ids, active }),
+    }),
+
+  bulkDeletePointsVente: (ids: string[]) =>
+    apiRequest<{ success: boolean; count: number }>("/points-vente/bulk", {
+      method: "DELETE",
+      body: JSON.stringify({ ids }),
+    }),
+
+  checkPointVenteDuplicates: (body: { name: string; latitude?: number; longitude?: number }) =>
+    apiRequest<{ duplicates: { id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; active: boolean; match_type: string }[] }>("/points-vente/check-duplicates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // Admin - Dashboard
   getDashboard: () => apiRequest<import("@/types").DashboardStats>("/dashboard", {

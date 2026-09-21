@@ -76,7 +76,7 @@ export function PermissionsEditor({ userType, userId, userLabel }: Props) {
       </div>
       {renderGroup("Terrain", FIELD_PERMISSIONS)}
       {userType === "agent_livreur" && renderGroup("Agent livreur", AGENT_LIVREUR_PERMISSIONS)}
-      {userType === "admin" && renderGroup("Tableau de bord", DASHBOARD_PERMISSIONS)}
+      {(userType === "admin" || userType === "superviseur") && renderGroup("Tableau de bord", DASHBOARD_PERMISSIONS)}
       {error && <p className="text-sm text-error-600">{error}</p>}
       <div className="flex items-center gap-3 pt-2">
         <button onClick={save} disabled={saving} className="btn-primary text-sm py-2">

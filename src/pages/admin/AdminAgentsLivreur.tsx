@@ -139,7 +139,7 @@ export function AdminAgentsLivreur() {
       )}
 
       {showPermEditor && (
-        <Modal title={`Permissions - ${showPermEditor.full_name}`} onClose={() => setShowPermEditor(null)}>
+        <Modal open={!!showPermEditor} title={`Permissions - ${showPermEditor.full_name}`} onClose={() => setShowPermEditor(null)}>
           <PermissionsEditor
             userType="agent_livreur"
             userId={showPermEditor.id}
