@@ -235,6 +235,10 @@ function sanitizeSearchTerm(raw: string): string {
   return raw.replace(/[,.()"'\\*:%]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function normalizeAccents(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 function getClientIp(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim().slice(0, 64);
@@ -1053,6 +1057,9 @@ async function handleRoute(req: Request): Promise<Response> {
       const secteurFilter = url.searchParams.get("secteur_id");
       if (secteurFilter) pvQuery = pvQuery.eq("secteur_id", secteurFilter);
       const searchQ = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
+      // Don't use PostgREST ilike for search — it's accent-sensitive and misses
+      // names like "La Fraîcheur" when the user types "fraicheur".
+      // The frontend already does accent-insensitive filtering client-side.
       if (searchQ) pvQuery = pvQuery.or(`name.ilike.%${searchQ}%,code.ilike.%${searchQ}%,city.ilike.%${searchQ}%`);
       const { data: points, error: pvError } = await pvQuery;
       if (pvError) return jsonError(500, "Erreur de lecture");
@@ -2006,15 +2013,22 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
       const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
+      const qNorm = normalizeAccents(q);
       let query = supabase
         .from("points_vente")
         .select("id, code, name, address, city, latitude, longitude, secteur_id")
-        .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
-        .limit(20);
+        .limit(100);
       if (userTeamId) query = query.eq("team_id", userTeamId);
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de recherche");
-      return jsonResponse(data);
+      const filtered = (data || []).filter((p: Record<string, unknown>) => {
+        const name = normalizeAccents(String(p.name || ""));
+        const code = normalizeAccents(String(p.code || ""));
+        const city = normalizeAccents(String(p.city || ""));
+        const address = normalizeAccents(String(p.address || ""));
+        return name.includes(qNorm) || code.includes(qNorm) || city.includes(qNorm) || address.includes(qNorm);
+      }).slice(0, 20);
+      return jsonResponse(filtered);
     }
 
     // --- CREATE COMMANDE (commercial) ---
@@ -2541,15 +2555,22 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
       const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
+      const qNorm = normalizeAccents(q);
       let query = supabase
         .from("points_vente")
         .select("id, code, name, address, city, latitude, longitude, secteur_id")
-        .or(`name.ilike.%${q}%,address.ilike.%${q}%,city.ilike.%${q}%,code.ilike.%${q}%`)
-        .limit(20);
+        .limit(100);
       if (userTeamId) query = query.eq("team_id", userTeamId);
       const { data, error } = await query;
       if (error) return jsonError(500, "Erreur de recherche");
-      return jsonResponse(data);
+      const filtered = (data || []).filter((p: Record<string, unknown>) => {
+        const name = normalizeAccents(String(p.name || ""));
+        const code = normalizeAccents(String(p.code || ""));
+        const city = normalizeAccents(String(p.city || ""));
+        const address = normalizeAccents(String(p.address || ""));
+        return name.includes(qNorm) || code.includes(qNorm) || city.includes(qNorm) || address.includes(qNorm);
+      }).slice(0, 20);
+      return jsonResponse(filtered);
     }
 
     // --- MES TOURNEES (agent livreur) ---

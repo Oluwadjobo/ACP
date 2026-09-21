@@ -23,8 +23,14 @@ export function MesPointsVente() {
   const filtered = useMemo(() => {
     let result = points;
     if (search) {
-      const q = search.toLowerCase();
-      result = result.filter((p) => (p.name || "").toLowerCase().includes(q) || (p.city || "").toLowerCase().includes(q) || (p.address || "").toLowerCase().includes(q) || (p.code || "").toLowerCase().includes(q));
+      const q = search.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      result = result.filter((p) => {
+        const name = (p.name || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const city = (p.city || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const address = (p.address || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const code = (p.code || "").toLowerCase();
+        return name.includes(q) || city.includes(q) || address.includes(q) || code.includes(q);
+      });
     }
     if (filter === "visite") result = result.filter((p) => p.statut === "visite");
     else if (filter === "non_visite") result = result.filter((p) => p.statut === "non_visite");

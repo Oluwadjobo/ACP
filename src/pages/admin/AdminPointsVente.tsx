@@ -96,11 +96,11 @@ export function AdminPointsVente() {
     : null;
 
   const filtered = points.filter((p) => {
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const matchesSearch = !q ||
-      p.name.toLowerCase().includes(q) ||
+      p.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q) ||
       p.code.toLowerCase().includes(q) ||
-      p.city.toLowerCase().includes(q);
+      p.city.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q);
     const matchesSecteur = !filterSecteur || p.secteur_id === filterSecteur;
     const matchesActive = !filterActive ||
       (filterActive === "active" && p.active !== false) ||

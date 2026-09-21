@@ -158,12 +158,12 @@ export function AdminCarte() {
 
   const filtered = useMemo(() => {
     if (!search) return validPoints;
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     return validPoints.filter(
       (p) =>
-        (p.name || "").toLowerCase().includes(q) ||
-        (p.city || "").toLowerCase().includes(q) ||
-        (p.address || "").toLowerCase().includes(q)
+        (p.name || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q) ||
+        (p.city || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q) ||
+        (p.address || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q)
     );
   }, [validPoints, search]);
 
