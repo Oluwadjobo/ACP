@@ -4,6 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+  "Access-Control-Expose-Headers": "X-Records-Received, X-Reported-Total, X-Pages-Fetched, X-Page-Size, X-Truncated",
 };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -17,15 +18,6 @@ const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
 const MAX_DISTANCE_METERS = 30;
 const MAX_GPS_ACCURACY_METERS = 15;
-
-const VENTE_MOTIFS = [
-  "Rupture de stock",
-  "Client absent",
-  "Refus du client",
-  "Fermeture exceptionnelle",
-  "Problème de paiement",
-  "Autre",
-];
 
 const VENTE_NON_REALISEE_MOTIFS = [
   "Rupture de stock",
@@ -158,6 +150,140 @@ async function listTeams() {
   return data || [];
 }
 
+const POS_QUERY_PAGE_SIZE = 500;
+const RELATED_ID_BATCH_SIZE = 100;
+
+interface PosPagination {
+  recordsReceived: number;
+  reportedTotal: number;
+  pagesFetched: number;
+  pageSize: number;
+  truncated: boolean;
+}
+
+async function fetchAllRows<T>(
+  loadPage: (from: number, to: number) => PromiseLike<{
+    data: T[] | null;
+    error: { message: string } | null;
+    count?: number | null;
+  }>
+): Promise<{ data: T[]; error: { message: string } | null; pagination: PosPagination }> {
+  const rows: T[] = [];
+  let pagesFetched = 0;
+  let reportedTotal: number | null = null;
+
+  for (let from = 0; ; from += POS_QUERY_PAGE_SIZE) {
+    const { data, error, count } = await loadPage(from, from + POS_QUERY_PAGE_SIZE - 1);
+    if (error) {
+      return {
+        data: rows,
+        error,
+        pagination: {
+          recordsReceived: rows.length,
+          reportedTotal: count ?? reportedTotal ?? rows.length,
+          pagesFetched,
+          pageSize: POS_QUERY_PAGE_SIZE,
+          truncated: true,
+        },
+      };
+    }
+
+    if (count !== null && count !== undefined) reportedTotal = count;
+    const page = data || [];
+    if (page.length > 0) pagesFetched++;
+    rows.push(...page);
+    if (reportedTotal !== null) {
+      if (rows.length >= reportedTotal || page.length === 0) break;
+    } else if (page.length < POS_QUERY_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  const total = reportedTotal ?? rows.length;
+  return {
+    data: rows,
+    error: null,
+    pagination: {
+      recordsReceived: rows.length,
+      reportedTotal: total,
+      pagesFetched,
+      pageSize: POS_QUERY_PAGE_SIZE,
+      truncated: rows.length < total,
+    },
+  };
+}
+
+function uniqueById<T extends Record<string, unknown>>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const id = String(row.id ?? "");
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+async function fetchRowsForIds<T>(
+  ids: string[],
+  loadPage: (batch: string[], from: number, to: number) => PromiseLike<{
+    data: T[] | null;
+    error: { message: string } | null;
+    count?: number | null;
+  }>
+): Promise<{ data: T[]; error: { message: string } | null }> {
+  const rows: T[] = [];
+  for (let index = 0; index < ids.length; index += RELATED_ID_BATCH_SIZE) {
+    const batch = ids.slice(index, index + RELATED_ID_BATCH_SIZE);
+    const result = await fetchAllRows((from, to) => loadPage(batch, from, to));
+    if (result.error) return { data: rows, error: result.error };
+    rows.push(...result.data);
+  }
+  return { data: rows, error: null };
+}
+
+async function getTeamPOS(teamId: string) {
+  const result = await fetchAllRows((from, to) => supabase
+    .from("points_vente")
+    .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id, active, created_by, created_by_role, created_at", { count: "exact" })
+    .eq("team_id", teamId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: true })
+    .range(from, to));
+  return { ...result, data: uniqueById(result.data as Record<string, unknown>[]) };
+}
+
+async function getPOSWithGPS(teamId: string | null) {
+  let query = supabase.from("points_vente").select("id", { count: "exact", head: true })
+    .not("latitude", "is", null).not("longitude", "is", null)
+    .gte("latitude", -90).lte("latitude", 90)
+    .gte("longitude", -180).lte("longitude", 180)
+    .or("latitude.neq.0,longitude.neq.0");
+  if (teamId) query = query.eq("team_id", teamId);
+  const { count, error } = await query;
+  return { count: count || 0, error };
+}
+
+function getCreatedPOSByCommercial(points: Record<string, unknown>[], commercialId: string, teamId: string): Record<string, unknown>[] {
+  return uniqueById(points.filter((point) => point.created_by === commercialId
+    && point.created_by_role === "commercial" && point.team_id === teamId));
+}
+
+function getVisitedPOS(visits: Record<string, unknown>[]): Set<string> {
+  return new Set(visits
+    .map((visit) => visit.point_vente_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0));
+}
+
+function paginationHeaders(pagination: PosPagination): HeadersInit {
+  return {
+    "X-Records-Received": String(pagination.recordsReceived),
+    "X-Reported-Total": String(pagination.reportedTotal),
+    "X-Pages-Fetched": String(pagination.pagesFetched),
+    "X-Page-Size": String(pagination.pageSize),
+    "X-Truncated": String(pagination.truncated),
+  };
+}
+
 // ============ CRYPTO HELPERS ============
 
 async function sha512(text: string): Promise<string> {
@@ -221,7 +347,7 @@ async function checkPassword(password: string, stored: string, table: string, id
     try {
       const upgraded = await hashPassword(password);
       await supabase.from(table).update({ password_hash: upgraded }).eq("id", id);
-    } catch (_e) { /* upgrade is best effort; never block a valid sign-in */ }
+    } catch { /* upgrade is best effort; never block a valid sign-in */ }
   }
   return result.ok;
 }
@@ -401,6 +527,186 @@ async function getPointVenteSecteur(pointVenteId: string, teamId: string | null)
   if (teamId) query = query.eq("team_id", teamId);
   const { data } = await query.maybeSingle();
   return data?.secteur_id ?? null;
+}
+
+async function getAssignedPOSForCommercial(commercialId: string, teamId: string | null, includeActivity = true) {
+  if (!teamId) {
+    return { points: null, secteurs: null, pagination: null, error: "Une équipe est requise pour résoudre les POS affectés" };
+  }
+  const [{ data: commercial, error: commercialError }, assignmentResult] = await Promise.all([
+    supabase.from("commerciaux").select("id, team_id").eq("id", commercialId).maybeSingle(),
+    fetchAllRows((from, to) => supabase
+      .from("commercial_tournees")
+      .select("secteur_id")
+      .eq("commercial_id", commercialId)
+      .eq("team_id", teamId)
+      .order("secteur_id", { ascending: true })
+      .range(from, to)),
+  ]);
+  if (commercialError) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la validation du commercial" };
+  if (!commercial || commercial.team_id !== teamId) {
+    return { points: null, secteurs: null, pagination: null, error: "Le commercial n'appartient pas à l'équipe demandée" };
+  }
+  if (assignmentResult.error) return { points: null, secteurs: null, pagination: assignmentResult.pagination, error: "Erreur lors de la récupération des tournées" };
+
+  const secteurIds = [...new Set(assignmentResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)))];
+  if (secteurIds.length === 0) {
+    return {
+      points: [],
+      secteurs: [],
+      pagination: assignmentResult.pagination,
+      error: null,
+    };
+  }
+
+  const secteurResult = await fetchAllRows((from, to) => supabase
+    .from("secteurs")
+    .select("id, nom, code, color_code, team_id", { count: "exact" })
+    .in("id", secteurIds)
+    .eq("team_id", teamId)
+    .order("id", { ascending: true })
+    .range(from, to));
+  const secteurs = secteurResult.data;
+  const secteursError = secteurResult.error;
+  if (secteursError) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la récupération des tournées" };
+  const validSecteurIds = secteurs.map((secteur: Record<string, unknown>) => String(secteur.id));
+  if (validSecteurIds.length === 0) {
+    return {
+      points: [],
+      secteurs: [],
+      pagination: { recordsReceived: 0, reportedTotal: 0, pagesFetched: 0, pageSize: POS_QUERY_PAGE_SIZE, truncated: false },
+      error: null,
+    };
+  }
+
+  const pointQuery = (from: number, to: number) => {
+    let query = supabase
+      .from("points_vente")
+      .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id, active, created_by, created_by_role, created_at", { count: "exact" })
+      .in("secteur_id", validSecteurIds)
+      .order("name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+    query = query.eq("team_id", teamId);
+    return query;
+  };
+  const pointResult = await fetchAllRows(pointQuery);
+  if (pointResult.error) return { points: null, secteurs: null, pagination: pointResult.pagination, error: "Erreur lors de la récupération des points de vente" };
+  const pointsById = uniqueById(pointResult.data as Record<string, unknown>[]);
+  const deduplicatedPointResult = { ...pointResult, data: pointsById };
+
+  const pointIds = pointsById.map((point: Record<string, unknown>) => String(point.id));
+  const secteurMap = new Map((secteurs || []).map((secteur: Record<string, unknown>) => [String(secteur.id), secteur]));
+  if (!includeActivity) {
+    const points = pointsById.map((point: Record<string, unknown>) => {
+      const secteur = point.secteur_id ? secteurMap.get(String(point.secteur_id)) : null;
+      return {
+        ...point,
+        secteur_nom: secteur?.nom ?? null,
+        secteur_code: secteur?.code ?? null,
+        secteur_color: secteur?.color_code ?? null,
+        derniere_visite: null,
+        derniere_vente: null,
+        vente_status: null,
+        statut: "non_visite",
+      };
+    });
+    return { points, secteurs: secteurs || [], pagination: pointResult.pagination, error: null };
+  }
+
+  const visitsResult = await fetchRowsForIds(pointIds, (batch, from, to) => supabase
+    .from("visites")
+    .select("id, point_vente_id, visited_at, vente_status", { count: "exact" })
+    .in("point_vente_id", batch)
+    .eq("commercial_id", commercialId)
+    .eq("team_id", teamId)
+    .order("visited_at", { ascending: false })
+    .range(from, to));
+  const visits = visitsResult.data;
+  const visitsError = visitsResult.error;
+  if (visitsError) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la récupération des visites" };
+
+  const salesResult = await fetchRowsForIds(pointIds, (batch, from, to) => supabase
+    .from("ventes")
+    .select("id, point_vente_id, created_at", { count: "exact" })
+    .in("point_vente_id", batch)
+    .eq("commercial_id", commercialId)
+    .eq("team_id", teamId)
+    .order("created_at", { ascending: false })
+    .range(from, to));
+  const sales = salesResult.data;
+  const salesError = salesResult.error;
+  if (salesError) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la récupération des ventes" };
+
+  const visitByPoint = new Map<string, Record<string, unknown>>();
+  for (const visit of (visits || []) as Record<string, unknown>[]) {
+    const pointId = String(visit.point_vente_id);
+    if (!visitByPoint.has(pointId)) visitByPoint.set(pointId, visit);
+  }
+  const enrichedPoints = deduplicatedPointResult.data.map((point: Record<string, unknown>) => {
+    const pointId = String(point.id);
+    const latestVisit = visitByPoint.get(pointId);
+    const secteur = point.secteur_id ? secteurMap.get(String(point.secteur_id)) : null;
+    const latestSale = (sales || []).find((sale: Record<string, unknown>) => String(sale.point_vente_id) === pointId);
+    return {
+      ...point,
+      secteur_nom: secteur?.nom ?? null,
+      secteur_code: secteur?.code ?? null,
+      secteur_color: secteur?.color_code ?? null,
+      derniere_visite: latestVisit?.visited_at ?? null,
+      derniere_vente: latestSale?.created_at ?? null,
+      vente_status: latestVisit?.vente_status ?? null,
+      statut: latestVisit ? "visite" : "non_visite",
+    };
+  });
+
+  return { points: enrichedPoints, secteurs: secteurs || [], pagination: pointResult.pagination, error: null };
+}
+
+async function getAssignedPOSForSupervisor(supervisorId: string, teamId: string | null) {
+  if (!teamId) {
+    return { points: null, secteurs: null, pagination: null, error: "Une équipe est requise pour résoudre les POS affectés" };
+  }
+  const { data: supervisor, error: supervisorError } = await supabase.from("superviseurs")
+    .select("id, team_id").eq("id", supervisorId).maybeSingle();
+  if (supervisorError) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la validation du superviseur" };
+  if (!supervisor || supervisor.team_id !== teamId) {
+    return { points: null, secteurs: null, pagination: null, error: "Le superviseur n'appartient pas à l'équipe demandée" };
+  }
+  const assignmentResult = await fetchAllRows((from, to) => supabase
+    .from("team_leader_tournees")
+    .select("secteur_id")
+    .eq("superviseur_id", supervisorId)
+    .eq("team_id", teamId)
+    .order("secteur_id", { ascending: true })
+    .range(from, to));
+  if (assignmentResult.error) return { points: null, secteurs: null, pagination: assignmentResult.pagination, error: "Erreur lors de la récupération des tournées" };
+  const secteurIds = [...new Set(assignmentResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)))];
+  if (secteurIds.length === 0) return { points: [], secteurs: [], pagination: assignmentResult.pagination, error: null };
+  const secteurResult = await fetchAllRows((from, to) => supabase
+    .from("secteurs")
+    .select("id, nom, code, color_code, team_id", { count: "exact" })
+    .in("id", secteurIds)
+    .eq("team_id", teamId)
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (secteurResult.error) return { points: null, secteurs: null, pagination: null, error: "Erreur lors de la récupération des tournées" };
+  const validSecteurIds = secteurResult.data.map((row: Record<string, unknown>) => String(row.id));
+  if (validSecteurIds.length === 0) return { points: [], secteurs: [], pagination: assignmentResult.pagination, error: null };
+  const pointResult = await fetchAllRows((from, to) => supabase
+    .from("points_vente")
+    .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id, active, created_by, created_by_role, created_at", { count: "exact" })
+    .in("secteur_id", validSecteurIds)
+    .eq("team_id", teamId)
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (pointResult.error) return { points: null, secteurs: null, pagination: pointResult.pagination, error: "Erreur lors de la récupération des points de vente" };
+  return {
+    points: uniqueById(pointResult.data as Record<string, unknown>[]),
+    secteurs: secteurResult.data,
+    pagination: pointResult.pagination,
+    error: null,
+  };
 }
 
 // ============ ROUTE HANDLER ============
@@ -684,15 +990,72 @@ async function handleRoute(req: Request): Promise<Response> {
       return null;
     }
 
+    if (path === "/diagnostics/commercial-points-vente" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      if (!effectiveTeamId) return jsonError(400, "Sélectionnez une équipe avant de lancer le diagnostic");
+
+      const { commercial_id: commercialId } = await req.json();
+      if (typeof commercialId !== "string" || !commercialId) return jsonError(400, "Commercial requis");
+      const { data: commercial, error: commercialError } = await supabase
+        .from("commerciaux")
+        .select("id, full_name, team_id, superviseur_id, active")
+        .eq("id", commercialId)
+        .eq("team_id", effectiveTeamId)
+        .maybeSingle();
+      if (commercialError) return jsonError(500, "Erreur lors de la récupération du commercial");
+      if (!commercial) return jsonError(404, "Commercial introuvable dans l'équipe sélectionnée");
+
+      let supervisorName: string | null = null;
+      if (commercial.superviseur_id) {
+        const { data: supervisor, error: supervisorError } = await supabase
+          .from("superviseurs")
+          .select("full_name")
+          .eq("id", commercial.superviseur_id)
+          .eq("team_id", effectiveTeamId)
+          .maybeSingle();
+        if (supervisorError) return jsonError(500, "Erreur lors de la récupération du superviseur");
+        supervisorName = supervisor?.full_name ?? null;
+      }
+      const [{ data: team, error: teamError }, commercialPoints] = await Promise.all([
+        supabase.from("teams").select("code, name").eq("id", effectiveTeamId).maybeSingle(),
+        getAssignedPOSForCommercial(String(commercial.id), effectiveTeamId, false),
+      ]);
+      if (teamError) return jsonError(500, "Erreur lors de la récupération de l'équipe");
+      if (commercialPoints.error || !commercialPoints.points || !commercialPoints.secteurs || !commercialPoints.pagination) {
+        return jsonError(500, commercialPoints.error || "Erreur lors de la récupération des points de vente");
+      }
+
+      return jsonResponse({
+        commercial: {
+          id: commercial.id,
+          full_name: commercial.full_name,
+          team_id: commercial.team_id,
+          team_code: team?.code ?? null,
+          team_name: team?.name ?? null,
+          active: commercial.active,
+          superviseur_id: commercial.superviseur_id,
+          superviseur_nom: supervisorName,
+          secteurs: commercialPoints.secteurs.map((secteur: Record<string, unknown>) => ({
+            id: secteur.id,
+            nom: secteur.nom ?? null,
+            code: secteur.code ?? null,
+          })),
+        },
+        points: commercialPoints.points,
+        pagination: commercialPoints.pagination,
+      });
+    }
 
     // --- SECTEURS CRUD ---
     if (path === "/secteurs" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_secteurs", "manage_commerciaux", "manage_superviseurs", "manage_points_vente", "view_carte", "view_dashboard", "view_visites"); if (denied) return denied; }
-      let query = supabase.from("secteurs").select("*").order("created_at", { ascending: false });
-      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      return jsonResponse(data);
+      const result = await fetchAllRows((from, to) => {
+        let query = supabase.from("secteurs").select("*", { count: "exact" }).order("created_at", { ascending: false }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      if (result.error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(uniqueById(result.data as Record<string, unknown>[]));
     }
     if (path === "/secteurs" && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_secteurs"); if (denied) return denied; }
@@ -749,22 +1112,30 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- COMMERCIAUX CRUD ---
     if (path === "/commerciaux" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_commerciaux", "view_visites", "view_ventes", "view_dashboard", "view_carte", "view_controles", "manage_bons_livraison"); if (denied) return denied; }
-      let query = supabase
-        .from("commerciaux").select("id, identifiant, full_name, active, telephone, superviseur_id, team_id, created_at, updated_at, permissions")
-        .order("created_at", { ascending: false });
-      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      const enriched = await Promise.all((data || []).map(async (c: Record<string, unknown>) => {
+      const commercialResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("commerciaux")
+          .select("id, identifiant, full_name, active, telephone, superviseur_id, team_id, created_at, updated_at, permissions", { count: "exact" })
+          .order("created_at", { ascending: false }).order("id", { ascending: true }).range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      if (commercialResult.error) return jsonError(500, "Erreur de lecture");
+      const enriched = await Promise.all(commercialResult.data.map(async (c: Record<string, unknown>) => {
         let superviseur_nom = null;
         if (c.superviseur_id) {
-          const { data: sup } = await supabase.from("superviseurs").select("full_name").eq("id", c.superviseur_id).maybeSingle();
+          let query = supabase.from("superviseurs").select("full_name").eq("id", c.superviseur_id);
+          if (c.team_id) query = query.eq("team_id", c.team_id);
+          const { data: sup, error: supervisorError } = await query.maybeSingle();
+          if (supervisorError) throw new Error("Erreur lors de la récupération du superviseur");
           superviseur_nom = sup?.full_name ?? null;
         }
-        let assignments = supabase.from("commercial_tournees").select("secteur_id, secteurs(nom, code)").eq("commercial_id", c.id);
-        if (effectiveTeamId) assignments = assignments.eq("team_id", effectiveTeamId);
-        const { data: assigned } = await assignments;
-        const tournees = (assigned ?? []).map((row: Record<string, unknown>) => {
+        if (!c.team_id) return { ...c, superviseur_nom, secteur_nom: null, tournees: [] };
+        const assignments = await fetchAllRows((from, to) => supabase.from("commercial_tournees")
+          .select("secteur_id, secteurs!inner(nom, code, team_id)", { count: "exact" })
+          .eq("commercial_id", c.id).eq("team_id", c.team_id).eq("secteurs.team_id", c.team_id)
+          .order("secteur_id", { ascending: true }).range(from, to));
+        if (assignments.error) throw new Error("Erreur lors de la récupération des tournées");
+        const tournees = assignments.data.map((row: Record<string, unknown>) => {
           const secteur = row.secteurs as Record<string, unknown> | null;
           return { secteur_id: String(row.secteur_id), nom: secteur?.nom ?? null, code: secteur?.code ?? null };
         });
@@ -843,17 +1214,22 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- SUPERVISEURS CRUD ---
     if (path === "/superviseurs" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_superviseurs", "view_controles", "view_dashboard", "view_visites"); if (denied) return denied; }
-      let query = supabase
-        .from("superviseurs").select("id, identifiant, full_name, active, telephone, team_id, created_at, updated_at, permissions")
-        .order("created_at", { ascending: false });
-      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      const enriched = await Promise.all((data || []).map(async (s: Record<string, unknown>) => {
-        let tltQuery = supabase.from("team_leader_tournees").select("secteur_id, secteurs(nom, code)").eq("superviseur_id", s.id);
-        if (effectiveTeamId) tltQuery = tltQuery.eq("team_id", effectiveTeamId);
-        const { data: tlt } = await tltQuery;
-        const tournees = (tlt || []).map((t: Record<string, unknown>) => ({
+      const supervisorResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("superviseurs")
+          .select("id, identifiant, full_name, active, telephone, team_id, created_at, updated_at, permissions", { count: "exact" })
+          .order("created_at", { ascending: false }).order("id", { ascending: true }).range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      if (supervisorResult.error) return jsonError(500, "Erreur de lecture");
+      const enriched = await Promise.all(supervisorResult.data.map(async (s: Record<string, unknown>) => {
+        if (!s.team_id) return { ...s, tournees: [] };
+        const assignmentResult = await fetchAllRows((from, to) => supabase.from("team_leader_tournees")
+          .select("secteur_id, secteurs!inner(nom, code, team_id)", { count: "exact" })
+          .eq("superviseur_id", s.id).eq("team_id", s.team_id).eq("secteurs.team_id", s.team_id)
+          .order("secteur_id", { ascending: true }).range(from, to));
+        if (assignmentResult.error) throw new Error("Erreur lors de la récupération des tournées du superviseur");
+        const tournees = assignmentResult.data.map((t: Record<string, unknown>) => ({
           secteur_id: t.secteur_id,
           nom: (t.secteurs as Record<string, unknown> | null)?.nom ?? null,
           code: (t.secteurs as Record<string, unknown> | null)?.code ?? null,
@@ -1048,36 +1424,81 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- POINTS DE VENTE CRUD ---
     if (path === "/points-vente" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_points_vente", "view_carte", "view_visites", "view_dashboard"); if (denied) return denied; }
-      let pvQuery = supabase.from("points_vente").select("*").order("created_at", { ascending: false });
-      if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
       // Admin filters: active status, secteur, search by name/code/city
       const activeFilter = url.searchParams.get("active");
-      if (activeFilter === "true") pvQuery = pvQuery.eq("active", true);
-      if (activeFilter === "false") pvQuery = pvQuery.eq("active", false);
       const secteurFilter = url.searchParams.get("secteur_id");
-      if (secteurFilter) pvQuery = pvQuery.eq("secteur_id", secteurFilter);
       const searchQ = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
+      const diagnosticMode = url.searchParams.get("diagnostic") === "true";
+      const commercialId = url.searchParams.get("commercial_id");
+      if (commercialId) {
+        let assignmentTeamId = effectiveTeamId;
+        if (!assignmentTeamId) {
+          const { data: commercial, error: commercialError } = await supabase
+            .from("commerciaux")
+            .select("team_id")
+            .eq("id", commercialId)
+            .maybeSingle();
+          if (commercialError) return jsonError(500, "Erreur lors de la validation du commercial");
+          assignmentTeamId = commercial?.team_id ?? null;
+        }
+        const assigned = await getAssignedPOSForCommercial(commercialId, assignmentTeamId, false);
+        if (assigned.error || !assigned.points || !assigned.pagination) {
+          return jsonError(assigned.error?.includes("n'appartient") ? 403 : 500, assigned.error || "Erreur lors de la récupération des POS affectés");
+        }
+        const assignedPoints = assigned.points as Record<string, unknown>[];
+        const filteredAssigned = assignedPoints.filter((point) => {
+          if (activeFilter === "true" && point.active !== true) return false;
+          if (activeFilter === "false" && point.active !== false) return false;
+          if (secteurFilter && point.secteur_id !== secteurFilter) return false;
+          if (searchQ) {
+            const term = normalizeAccents(searchQ);
+            return [point.name, point.code, point.city].some((value) => normalizeAccents(String(value || "")).includes(term));
+          }
+          return true;
+        });
+        return jsonResponse(filteredAssigned, 200, diagnosticMode ? paginationHeaders(assigned.pagination) : undefined);
+      }
       // Don't use PostgREST ilike for search — it's accent-sensitive and misses
       // names like "La Fraîcheur" when the user types "fraicheur".
       // The frontend already does accent-insensitive filtering client-side.
-      if (searchQ) pvQuery = pvQuery.or(`name.ilike.%${searchQ}%,code.ilike.%${searchQ}%,city.ilike.%${searchQ}%`);
-      const { data: points, error: pvError } = await pvQuery;
+      const buildPointsQuery = (from: number, to: number) => {
+        let pvQuery = supabase.from("points_vente").select("*", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
+        if (activeFilter === "true") pvQuery = pvQuery.eq("active", true);
+        if (activeFilter === "false") pvQuery = pvQuery.eq("active", false);
+        if (secteurFilter) pvQuery = pvQuery.eq("secteur_id", secteurFilter);
+        if (searchQ) pvQuery = pvQuery.or(`name.ilike.%${searchQ}%,code.ilike.%${searchQ}%,city.ilike.%${searchQ}%`);
+        return pvQuery;
+      };
+      const pointsResult = await fetchAllRows(buildPointsQuery);
+      const points = pointsResult.data;
+      const pvError = pointsResult.error;
       if (pvError) return jsonError(500, "Erreur de lecture");
       const secteurIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.secteur_id).filter(Boolean))] as string[];
-      let secteurMap: Record<string, Record<string, unknown>> = {};
+      const secteurMap: Record<string, Record<string, unknown>> = {};
       if (secteurIds.length > 0) {
-        let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secteurIds);
-        if (effectiveTeamId) secQuery = secQuery.eq("team_id", effectiveTeamId);
-        const { data: secteurs } = await secQuery;
-        for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
+        const secteurResult = await fetchRowsForIds(secteurIds, (batch, from, to) => {
+          let query = supabase.from("secteurs").select("id, nom, code, color_code", { count: "exact" }).in("id", batch).range(from, to);
+          if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+          return query;
+        });
+        if (secteurResult.error) return jsonError(500, "Erreur lors de la récupération des secteurs POS");
+        for (const s of secteurResult.data as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
       }
       // Fetch commercial names per secteur via commercial_tournees
-      let commercialMap: Record<string, string> = {};
+      const commercialMap: Record<string, string> = {};
       if (secteurIds.length > 0) {
-        let ctQuery = supabase.from("commercial_tournees").select("secteur_id, commercial:commerciaux(full_name)").in("secteur_id", secteurIds);
-        if (effectiveTeamId) ctQuery = ctQuery.eq("team_id", effectiveTeamId);
-        const { data: ctData } = await ctQuery;
-        for (const row of (ctData || []) as Record<string, unknown>[]) {
+        const assignmentResult = await fetchRowsForIds(secteurIds, (batch, from, to) => {
+          let query = supabase.from("commercial_tournees").select("secteur_id, commercial:commerciaux(full_name)", { count: "exact" })
+            .in("secteur_id", batch).order("secteur_id", { ascending: true }).range(from, to);
+          if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+          return query;
+        });
+        if (assignmentResult.error) return jsonError(500, "Erreur lors de la récupération des affectations POS");
+        for (const row of assignmentResult.data as Record<string, unknown>[]) {
           const sid = String(row.secteur_id);
           const commercial = row.commercial as Record<string, unknown> | null;
           if (commercial?.full_name && !commercialMap[sid]) commercialMap[sid] = String(commercial.full_name);
@@ -1085,14 +1506,17 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       // Resolve created_by IDs to names
       const creatorIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.created_by).filter(Boolean))] as string[];
-      let creatorMap: Record<string, string> = {};
+      const creatorMap: Record<string, string> = {};
       if (creatorIds.length > 0) {
-        const { data: comCreators } = await supabase.from("commerciaux").select("id, full_name").in("id", creatorIds);
-        for (const c of (comCreators || []) as Record<string, unknown>[]) creatorMap[String(c.id)] = String(c.full_name);
-        const { data: supCreators } = await supabase.from("superviseurs").select("id, full_name").in("id", creatorIds);
-        for (const s of (supCreators || []) as Record<string, unknown>[]) creatorMap[String(s.id)] = String(s.full_name);
-        const { data: adminCreators } = await supabase.from("admins").select("id, full_name").in("id", creatorIds);
-        for (const a of (adminCreators || []) as Record<string, unknown>[]) creatorMap[String(a.id)] = String(a.full_name);
+        const creatorResults = await Promise.all([
+          fetchRowsForIds(creatorIds, (batch, from, to) => supabase.from("commerciaux").select("id, full_name", { count: "exact" }).in("id", batch).range(from, to)),
+          fetchRowsForIds(creatorIds, (batch, from, to) => supabase.from("superviseurs").select("id, full_name", { count: "exact" }).in("id", batch).range(from, to)),
+          fetchRowsForIds(creatorIds, (batch, from, to) => supabase.from("admins").select("id, full_name", { count: "exact" }).in("id", batch).range(from, to)),
+        ]);
+        if (creatorResults.some((result) => result.error)) return jsonError(500, "Erreur lors de la récupération des créateurs POS");
+        for (const result of creatorResults) {
+          for (const creator of result.data as Record<string, unknown>[]) creatorMap[String(creator.id)] = String(creator.full_name);
+        }
       }
       const enriched = (points || []).map((p: Record<string, unknown>) => {
         const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
@@ -1100,7 +1524,7 @@ async function handleRoute(req: Request): Promise<Response> {
         const created_by_name = p.created_by ? creatorMap[String(p.created_by)] ?? null : null;
         return { ...p, secteur_nom: secteur?.nom ?? null, secteur_code: secteur?.code ?? null, secteur_color: secteur?.color_code ?? null, commercial_nom, created_by_name };
       });
-      return jsonResponse(enriched);
+      return jsonResponse(enriched, 200, diagnosticMode ? paginationHeaders(pointsResult.pagination) : undefined);
     }
     if (path === "/points-vente" && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
@@ -1228,8 +1652,18 @@ async function handleRoute(req: Request): Promise<Response> {
         return count || 0;
       }
 
+      async function countActivePOS() {
+        let query = supabase.from("points_vente").select("id", { count: "exact", head: true })
+          .or("active.eq.true,active.is.null");
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        const { count, error } = await query;
+        if (error) throw new Error("Erreur lors du comptage des POS actifs");
+        return count || 0;
+      }
+
       const [
         totalCommerciaux, totalSuperviseurs, totalSecteurs, totalPointsVente,
+        totalPointsVenteActifs, totalPointsVenteDesactives, totalPointsVenteAvecGps,
         visitesToday, outOfZoneToday, promessesToday,
         ventesRealisees, ventesNonRealisees,
         blEnAttente, blLivres, blPartiels, blAnnules,
@@ -1239,6 +1673,12 @@ async function handleRoute(req: Request): Promise<Response> {
         countWithTeam("superviseurs"),
         countWithTeam("secteurs"),
         countWithTeam("points_vente"),
+        countActivePOS(),
+        countWithTeam("points_vente", { active: false }),
+        getPOSWithGPS(effectiveTeamId).then(({ count, error }) => {
+          if (error) throw new Error("Erreur lors du comptage des POS avec GPS");
+          return count;
+        }),
         (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
         (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).eq("status", "out_of_zone").gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
         (async () => { let q = supabase.from("promesses_achat").select("*", { count: "exact", head: true }).gte("created_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
@@ -1254,6 +1694,8 @@ async function handleRoute(req: Request): Promise<Response> {
 
       return jsonResponse({
         totalCommerciaux, totalSuperviseurs, totalSecteurs, totalPointsVente,
+        totalPointsVenteActifs, totalPointsVenteDesactives,
+        totalPointsVenteAvecGps, totalPointsVenteSansGps: Math.max(0, totalPointsVente - totalPointsVenteAvecGps),
         visitesToday, outOfZoneToday, promessesToday,
         ventesRealisees, ventesNonRealisees,
         blEnAttente, blLivres, blPartiels, blAnnules,
@@ -1541,85 +1983,130 @@ async function handleRoute(req: Request): Promise<Response> {
 
       const dateStart = url.searchParams.get("date_start");
       const dateEnd = url.searchParams.get("date_end");
-      const hasPeriod = !!dateStart || !!dateEnd;
       const startIso = dateStart ? new Date(dateStart + "T00:00:00").toISOString() : null;
       const endIso = dateEnd ? new Date(dateEnd + "T23:59:59").toISOString() : null;
 
-      let comQuery = supabase.from("commerciaux").select("id, full_name, active");
-      if (effectiveTeamId) comQuery = comQuery.eq("team_id", effectiveTeamId);
-      const { data: commerciaux } = await comQuery;
-
-      let visQuery = supabase.from("visites").select("id, commercial_id, superviseur_id, point_vente_id, vente_status, visited_at, status");
-      if (effectiveTeamId) visQuery = visQuery.eq("team_id", effectiveTeamId);
-      if (startIso) visQuery = visQuery.gte("visited_at", startIso);
-      if (endIso) visQuery = visQuery.lte("visited_at", endIso);
-      const { data: visites } = await visQuery;
-
-      let ventQuery = supabase.from("ventes").select("id, commercial_id, superviseur_id, created_at");
-      if (effectiveTeamId) ventQuery = ventQuery.eq("team_id", effectiveTeamId);
-      if (startIso) ventQuery = ventQuery.gte("created_at", startIso);
-      if (endIso) ventQuery = ventQuery.lte("created_at", endIso);
-      const { data: ventes } = await ventQuery;
-
-      let pvQuery = supabase.from("points_vente").select("id", { count: "exact", head: true });
-      if (effectiveTeamId) pvQuery = pvQuery.eq("team_id", effectiveTeamId);
-      const { count: pvCount } = await pvQuery;
-
-      let alQuery = supabase.from("agents_livreur").select("id, full_name, active");
-      if (effectiveTeamId) alQuery = alQuery.eq("team_id", effectiveTeamId);
-      const { data: agentsLivreur } = await alQuery;
-
-      let cmdQuery = supabase.from("commandes").select("agent_livreur_id, commercial_id, statut, point_vente_id, created_at");
-      if (effectiveTeamId) cmdQuery = cmdQuery.eq("team_id", effectiveTeamId);
-      if (startIso) cmdQuery = cmdQuery.gte("created_at", startIso);
-      if (endIso) cmdQuery = cmdQuery.lte("created_at", endIso);
-      const { data: commandes } = await cmdQuery;
-
-      let livQuery = supabase.from("livraisons").select("agent_livreur_id, point_vente_id, created_at");
-      if (effectiveTeamId) livQuery = livQuery.eq("team_id", effectiveTeamId);
-      if (startIso) livQuery = livQuery.gte("created_at", startIso);
-      if (endIso) livQuery = livQuery.lte("created_at", endIso);
-      const { data: livraisons } = await livQuery;
-
-      let supQuery = supabase.from("superviseurs").select("id, full_name, active");
-      if (effectiveTeamId) supQuery = supQuery.eq("team_id", effectiveTeamId);
-      const { data: superviseurs } = await supQuery;
-
-      let ctrlQuery = supabase.from("controles_terrain").select("superviseur_id, created_at");
-      if (effectiveTeamId) ctrlQuery = ctrlQuery.eq("team_id", effectiveTeamId);
-      if (startIso) ctrlQuery = ctrlQuery.gte("created_at", startIso);
-      if (endIso) ctrlQuery = ctrlQuery.lte("created_at", endIso);
-      const { data: controles } = await ctrlQuery;
-
-      let pvCreatedQuery = supabase.from("points_vente").select("id, created_by, created_by_role, created_at");
-      if (effectiveTeamId) pvCreatedQuery = pvCreatedQuery.eq("team_id", effectiveTeamId);
-      if (startIso) pvCreatedQuery = pvCreatedQuery.gte("created_at", startIso);
-      if (endIso) pvCreatedQuery = pvCreatedQuery.lte("created_at", endIso);
-      const { data: pvCreated } = await pvCreatedQuery;
-
+      const commerciauxResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("commerciaux").select("id, full_name, active, team_id", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      const visitesResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("visites").select("id, team_id, commercial_id, superviseur_id, point_vente_id, vente_status, visited_at, status", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("visited_at", startIso);
+        if (endIso) query = query.lte("visited_at", endIso);
+        return query;
+      });
+      const ventesResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("ventes").select("id, team_id, commercial_id, superviseur_id, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
+      const pointsResult = effectiveTeamId
+        ? await getTeamPOS(effectiveTeamId)
+        : await fetchAllRows((from, to) => supabase.from("points_vente")
+          .select("id, team_id, active, latitude, longitude, created_by, created_by_role, created_at", { count: "exact" })
+          .order("id").range(from, to));
+      const agentsResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("agents_livreur").select("id, full_name, active", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      const commandesResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("commandes").select("id, team_id, agent_livreur_id, commercial_id, statut, point_vente_id, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
+      const livraisonsResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("livraisons").select("id, team_id, agent_livreur_id, point_vente_id, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
+      const superviseursResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("superviseurs").select("id, full_name, active, team_id", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      const controlesResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("controles_terrain").select("id, team_id, superviseur_id, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
+      const pvCreatedResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("points_vente").select("id, team_id, created_by, created_by_role, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
       let promQuery = supabase.from("promesses_achat").select("id, created_at");
       if (effectiveTeamId) promQuery = promQuery.eq("team_id", effectiveTeamId);
       if (startIso) promQuery = promQuery.gte("created_at", startIso);
       if (endIso) promQuery = promQuery.lte("created_at", endIso);
       const { count: promesseCount } = await promQuery;
 
-      let blQuery = supabase.from("bons_livraison").select("id, statut, created_at");
-      if (effectiveTeamId) blQuery = blQuery.eq("team_id", effectiveTeamId);
-      if (startIso) blQuery = blQuery.gte("created_at", startIso);
-      if (endIso) blQuery = blQuery.lte("created_at", endIso);
-      const { data: bls } = await blQuery;
+      const blsResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("bons_livraison").select("id, statut, created_at", { count: "exact" }).order("id").range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        if (startIso) query = query.gte("created_at", startIso);
+        if (endIso) query = query.lte("created_at", endIso);
+        return query;
+      });
+      const dataResults = [commerciauxResult, visitesResult, ventesResult, pointsResult, agentsResult, commandesResult, livraisonsResult, superviseursResult, controlesResult, pvCreatedResult, blsResult];
+      if (dataResults.some((result) => result.error)) return jsonError(500, "Erreur lors de la récupération des statistiques de l'équipe");
+      const commerciaux = commerciauxResult.data;
+      const visites = visitesResult.data;
+      const ventes = ventesResult.data;
+      const pvCount = uniqueById(pointsResult.data as Record<string, unknown>[]).length;
+      const agentsLivreur = agentsResult.data;
+      const commandes = commandesResult.data;
+      const livraisons = livraisonsResult.data;
+      const superviseurs = superviseursResult.data;
+      const controles = controlesResult.data;
+      const pvCreated = pvCreatedResult.data as Record<string, unknown>[];
+      const bls = blsResult.data;
 
+      const [assignedCommercialRows, createdCommercialRows] = await Promise.all([
+        Promise.all((commerciaux || []).map(async (commercial: Record<string, unknown>) => {
+          const result = await getAssignedPOSForCommercial(String(commercial.id), String(commercial.team_id || ""), false);
+          if (result.error || !result.points) throw new Error(result.error || "Erreur lors de la récupération des POS affectés");
+          return [String(commercial.id), new Set((result.points as Record<string, unknown>[]).map((point) => String(point.id)))] as const;
+        })),
+        Promise.resolve((commerciaux || []).map((commercial: Record<string, unknown>) => [
+          String(commercial.id),
+          getCreatedPOSByCommercial(pvCreated, String(commercial.id), String(commercial.team_id)).length,
+        ] as const)),
+      ]);
+      const assignedCommercialIds = new Map(assignedCommercialRows);
+      const createdCommercialCounts = new Map(createdCommercialRows);
+      const assignedSupervisorRows = await Promise.all((superviseurs || []).map(async (supervisor: Record<string, unknown>) => {
+        const result = await getAssignedPOSForSupervisor(String(supervisor.id), String(supervisor.team_id || ""));
+        if (result.error || !result.points) throw new Error(result.error || "Erreur lors de la récupération des POS affectés");
+        return [String(supervisor.id), new Set((result.points as Record<string, unknown>[]).map((point) => String(point.id)))] as const;
+      }));
+      const assignedSupervisorIds = new Map(assignedSupervisorRows);
       const commercialStats = (commerciaux || []).map((c: Record<string, unknown>) => {
         const cId = String(c.id);
-        const cVisites = (visites || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
-        const cVentes = (ventes || []).filter((v: Record<string, unknown>) => v.commercial_id === cId);
-        const distinctPdv = new Set(cVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
-        const pdvCreated = (pvCreated || []).filter((p: Record<string, unknown>) => p.created_by === cId && p.created_by_role === "commercial").length;
+        const cVisites = (visites || []).filter((v: Record<string, unknown>) => v.commercial_id === cId && v.team_id === c.team_id);
+        const cVentes = (ventes || []).filter((v: Record<string, unknown>) => v.commercial_id === cId && v.team_id === c.team_id);
+        const distinctPdv = getVisitedPOS(cVisites as Record<string, unknown>[]).size;
+        const pdvCreated = createdCommercialCounts.get(cId) ?? 0;
         return {
           id: cId,
           full_name: String(c.full_name),
           active: !!c.active,
           points_vente: distinctPdv,
+          points_vente_visites: distinctPdv,
+          points_vente_affectes: assignedCommercialIds.get(cId)?.size ?? 0,
           points_vente_crees: pdvCreated,
           visites: cVisites.length,
           ventes: cVentes.length,
@@ -1630,14 +2117,15 @@ async function handleRoute(req: Request): Promise<Response> {
 
       const agentStats = (agentsLivreur || []).map((a: Record<string, unknown>) => {
         const aId = String(a.id);
-        const aCommandes = (commandes || []).filter((c: Record<string, unknown>) => c.agent_livreur_id === aId);
-        const aLivraisons = (livraisons || []).filter((l: Record<string, unknown>) => l.agent_livreur_id === aId);
-        const distinctPdv = new Set(aLivraisons.map((l: Record<string, unknown>) => l.point_vente_id)).size;
+        const aCommandes = (commandes || []).filter((c: Record<string, unknown>) => c.agent_livreur_id === aId && c.team_id === a.team_id);
+        const aLivraisons = (livraisons || []).filter((l: Record<string, unknown>) => l.agent_livreur_id === aId && l.team_id === a.team_id);
+        const distinctPdv = new Set(aLivraisons.map((l: Record<string, unknown>) => String(l.point_vente_id)).filter(Boolean)).size;
         return {
           id: aId,
           full_name: String(a.full_name),
           active: !!a.active,
           points_vente: distinctPdv,
+          points_vente_livres: distinctPdv,
           commandes: aCommandes.length,
           livrees: aCommandes.filter((c: Record<string, unknown>) => c.statut === "livree").length,
           en_cours: aCommandes.filter((c: Record<string, unknown>) => c.statut !== "livree" && c.statut !== "annulee").length,
@@ -1647,16 +2135,19 @@ async function handleRoute(req: Request): Promise<Response> {
 
       const superviseurStats = (superviseurs || []).map((s: Record<string, unknown>) => {
         const sId = String(s.id);
-        const sVisites = (visites || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId);
-        const sVentes = (ventes || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId);
-        const sControles = (controles || []).filter((c: Record<string, unknown>) => c.superviseur_id === sId);
-        const distinctPdv = new Set(sVisites.map((v: Record<string, unknown>) => v.point_vente_id)).size;
-        const pdvCreated = (pvCreated || []).filter((p: Record<string, unknown>) => p.created_by === sId && p.created_by_role === "superviseur").length;
+        const sVisites = (visites || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId && v.team_id === s.team_id);
+        const sVentes = (ventes || []).filter((v: Record<string, unknown>) => v.superviseur_id === sId && v.team_id === s.team_id);
+        const sControles = (controles || []).filter((c: Record<string, unknown>) => c.superviseur_id === sId && c.team_id === s.team_id);
+        const distinctPdv = getVisitedPOS(sVisites as Record<string, unknown>[]).size;
+        const pdvCreated = uniqueById(pvCreated.filter((p) => p.created_by === sId
+          && p.created_by_role === "superviseur" && p.team_id === s.team_id)).length;
         return {
           id: sId,
           full_name: String(s.full_name),
           active: !!s.active,
           points_vente: distinctPdv,
+          points_vente_visites: distinctPdv,
+          points_vente_affectes: assignedSupervisorIds.get(sId)?.size ?? 0,
           points_vente_crees: pdvCreated,
           visites: sVisites.length,
           ventes: sVentes.length,
@@ -1664,12 +2155,12 @@ async function handleRoute(req: Request): Promise<Response> {
         };
       });
 
-      const allVisitedPvIds = new Set((visites || []).map((v: Record<string, unknown>) => v.point_vente_id).filter(Boolean) as string[]);
+      const allVisitedPvIds = getVisitedPOS(visites as Record<string, unknown>[]);
       const visitesNonValidees = (visites || []).filter((v: Record<string, unknown>) => v.status === "out_of_zone").length;
 
       return jsonResponse({
         totals: {
-          points_vente: hasPeriod ? allVisitedPvIds.size : (pvCount || 0),
+          points_vente: pvCount,
           points_vente_visites: allVisitedPvIds.size,
           visites: visites?.length || 0,
           visites_non_validees: visitesNonValidees,
@@ -2013,15 +2504,16 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
       const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour rechercher les POS");
       const qNorm = normalizeAccents(q);
-      let query = supabase
+      const result = await fetchAllRows((from, to) => supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, secteur_id")
-        .limit(100);
-      if (userTeamId) query = query.eq("team_id", userTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de recherche");
-      const filtered = (data || []).filter((p: Record<string, unknown>) => {
+        .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id", { count: "exact" })
+        .eq("team_id", userTeamId)
+        .order("id", { ascending: true })
+        .range(from, to));
+      if (result.error) return jsonError(500, "Erreur de recherche");
+      const filtered = uniqueById(result.data as Record<string, unknown>[]).filter((p: Record<string, unknown>) => {
         const name = normalizeAccents(String(p.name || ""));
         const code = normalizeAccents(String(p.code || ""));
         const city = normalizeAccents(String(p.city || ""));
@@ -2103,49 +2595,85 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/secteurs" && method === "GET") {
       const denied = requirePermission("create_point_vente");
       if (denied) return denied;
+      if (userRole !== "commercial" && userRole !== "superviseur") return jsonError(403, "Rôle non autorisé");
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour récupérer les tournées affectées");
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
-      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, session.user_id);
-      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
-      const { data: assignmentRows, error: assignmentError } = await assignments;
-      if (assignmentError) return jsonError(500, "Erreur lors de la récupération des tournées");
-      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
+      const assignmentResult = await fetchAllRows((from, to) => supabase.from(assignmentTable).select("secteur_id", { count: "exact" })
+        .eq(ownerColumn, session.user_id).eq("team_id", userTeamId).order("secteur_id").range(from, to));
+      if (assignmentResult.error) return jsonError(500, "Erreur lors de la récupération des tournées");
+      const secteurIds = [...new Set(assignmentResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)))];
       if (secteurIds.length === 0) return jsonResponse([]);
-      let secteurQuery = supabase.from("secteurs").select("*").in("id", secteurIds).eq("actif", true).order("created_at", { ascending: false });
-      if (userTeamId) secteurQuery = secteurQuery.eq("team_id", userTeamId);
-      const { data: secteurs, error: secteurError } = await secteurQuery;
-      if (secteurError) return jsonError(500, "Erreur de lecture");
-      return jsonResponse(secteurs);
+      const secteurResult = await fetchRowsForIds(secteurIds, (batch, from, to) => supabase.from("secteurs").select("*", { count: "exact" })
+        .in("id", batch).eq("team_id", userTeamId).eq("actif", true).order("created_at", { ascending: false }).range(from, to));
+      if (secteurResult.error) return jsonError(500, "Erreur de lecture");
+      return jsonResponse(uniqueById(secteurResult.data as Record<string, unknown>[]));
     }
 
     // --- MES TOURNEES (commercial + superviseur) ---
     if (path === "/mes-tournees" && method === "GET") {
+      if (userRole === "agent_livreur") {
+        let commandesQuery = supabase.from("commandes").select("id, statut, secteur_id, created_at", { count: "exact" })
+          .eq("agent_livreur_id", userId).order("created_at", { ascending: false });
+        if (userTeamId) commandesQuery = commandesQuery.eq("team_id", userTeamId);
+        const commandesResult = await fetchAllRows((from, to) => commandesQuery.range(from, to));
+        if (commandesResult.error) return jsonError(500, "Erreur de lecture");
+        const secteurIds = [...new Set(commandesResult.data.map((row: Record<string, unknown>) => row.secteur_id).filter(Boolean).map(String))];
+        if (secteurIds.length === 0) return jsonResponse([]);
+        const secteursResult = await fetchRowsForIds(secteurIds, (batch, from, to) => {
+          let query = supabase.from("secteurs").select("*", { count: "exact" }).in("id", batch).order("nom", { ascending: true }).range(from, to);
+          if (userTeamId) query = query.eq("team_id", userTeamId);
+          return query;
+        });
+        if (secteursResult.error) return jsonError(500, "Erreur de lecture");
+        const sectors = uniqueById(secteursResult.data as Record<string, unknown>[]);
+        return jsonResponse(sectors.map((sector) => {
+          const sectorCommands = commandesResult.data.filter((row: Record<string, unknown>) => row.secteur_id === sector.id);
+          const delivered = sectorCommands.filter((row: Record<string, unknown>) => row.statut === "livree").length;
+          const pending = sectorCommands.filter((row: Record<string, unknown>) => row.statut !== "livree" && row.statut !== "annulee").length;
+          return {
+            id: String(sector.id),
+            nom: sector.nom,
+            code: sector.code,
+            color_code: sector.color_code,
+            actif: sector.actif,
+            total_commandes: sectorCommands.length,
+            livrees: delivered,
+            en_cours: pending,
+            restantes: pending,
+            statut: delivered === 0 ? "a_venir" : delivered >= sectorCommands.length ? "terminee" : "en_cours",
+          };
+        }));
+      }
+      if (userRole !== "commercial" && userRole !== "superviseur") return jsonError(403, "Rôle non autorisé");
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour récupérer les tournées affectées");
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
-      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId);
-      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
-      const { data: assignmentRows } = await assignments;
-      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
+      const assignmentResult = await fetchAllRows((from, to) => supabase.from(assignmentTable).select("secteur_id", { count: "exact" })
+        .eq(ownerColumn, userId).eq("team_id", userTeamId).order("secteur_id").range(from, to));
+      if (assignmentResult.error) return jsonError(500, "Erreur lors de la récupération des tournées");
+      const secteurIds = [...new Set(assignmentResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)))];
       if (secteurIds.length === 0) return jsonResponse([]);
-      let secteurQuery = supabase.from("secteurs").select("*").in("id", secteurIds).order("nom", { ascending: true });
-      if (userTeamId) secteurQuery = secteurQuery.eq("team_id", userTeamId);
-      const { data: secteurs, error: sErr } = await secteurQuery;
-      if (sErr) return jsonError(500, "Erreur de lecture");
+      const secteursResult = await fetchRowsForIds(secteurIds, (batch, from, to) => supabase.from("secteurs").select("*", { count: "exact" })
+        .in("id", batch).eq("team_id", userTeamId).order("nom", { ascending: true }).range(from, to));
+      if (secteursResult.error) return jsonError(500, "Erreur de lecture");
+      const secteurs = uniqueById(secteursResult.data as Record<string, unknown>[]);
       // For each secteur, count PVs and visits
-      const result = await Promise.all((secteurs || []).map(async (sec: Record<string, unknown>) => {
+      const result = await Promise.all(secteurs.map(async (sec: Record<string, unknown>) => {
         const secId = String(sec.id);
         let pvQ = supabase.from("points_vente").select("id", { count: "exact", head: true }).eq("secteur_id", secId);
-        if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
-        const { count: totalPv } = await pvQ;
+        pvQ = pvQ.eq("team_id", userTeamId);
+        const { count: totalPv, error: pvError } = await pvQ;
+        if (pvError) throw new Error("Erreur lors du comptage des POS de tournée");
 
         let visQ = supabase.from("visites").select("id, point_vente_id, vente_status, visited_at", { count: "exact" }).eq("secteur_id", secId);
         if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
         else visQ = visQ.eq("superviseur_id", userId);
-        if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
-        const { data: visites } = await visQ;
-
-        const visList = visites || [];
-        const visitedPvIds = new Set(visList.map((v: Record<string, unknown>) => v.point_vente_id));
+        visQ = visQ.eq("team_id", userTeamId);
+        const visitesResult = await fetchAllRows((from, to) => visQ.order("id").range(from, to));
+        if (visitesResult.error) throw new Error("Erreur lors de la récupération des visites de tournée");
+        const visList = visitesResult.data as Record<string, unknown>[];
+        const visitedPvIds = getVisitedPOS(visList);
         const ventesRealisees = visList.filter((v: Record<string, unknown>) => v.vente_status === "vente_realisee" || v.vente_status === "vente_livraison").length;
         const ventesNonRealisees = visList.filter((v: Record<string, unknown>) => v.vente_status === "vente_non_realisee").length;
         const promesses = visList.filter((v: Record<string, unknown>) => v.vente_status === "promesse_achat").length;
@@ -2153,12 +2681,12 @@ async function handleRoute(req: Request): Promise<Response> {
         // Livraisons for this secteur
         let livQ = supabase.from("livraisons").select("id, statut_final", { count: "exact", head: true }).eq("secteur_id", secId);
         if (userRole === "commercial") livQ = livQ.eq("commercial_id", userId);
-        if (userTeamId) livQ = livQ.eq("team_id", userTeamId);
+        livQ = livQ.eq("team_id", userTeamId);
         const { count: livraisonsCount } = await livQ;
 
         let blQ = supabase.from("bons_livraison").select("id, statut", { count: "exact", head: true }).eq("secteur_id", secId);
         if (userRole === "commercial") blQ = blQ.eq("commercial_id", userId);
-        if (userTeamId) blQ = blQ.eq("team_id", userTeamId);
+        blQ = blQ.eq("team_id", userTeamId);
         const { count: blCount } = await blQ;
 
         const visitedCount = visitedPvIds.size;
@@ -2188,42 +2716,56 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- TOURNEE DETAIL (commercial + superviseur) ---
     if (path.startsWith("/tournee-detail/") && method === "GET") {
+      if (userRole !== "commercial" && userRole !== "superviseur") return jsonError(403, "Rôle non autorisé");
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour récupérer la tournée");
       const secteurId = path.split("/")[2];
       // Verify assignment
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
       let assignQ = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId).eq("secteur_id", secteurId);
-      if (userTeamId) assignQ = assignQ.eq("team_id", userTeamId);
-      const { data: assignment } = await assignQ.maybeSingle();
+      assignQ = assignQ.eq("team_id", userTeamId);
+      const { data: assignment, error: assignmentError } = await assignQ.maybeSingle();
+      if (assignmentError) return jsonError(500, "Erreur lors de la vérification de l'affectation");
       if (!assignment) return jsonError(403, "Cette tournée ne vous est pas affectée");
 
-      let secQ = supabase.from("secteurs").select("*").eq("id", secteurId);
-      if (userTeamId) secQ = secQ.eq("team_id", userTeamId);
-      const { data: secteur } = await secQ.maybeSingle();
+      const { data: secteur, error: secteurError } = await supabase.from("secteurs").select("*").eq("id", secteurId).eq("team_id", userTeamId).maybeSingle();
+      if (secteurError) return jsonError(500, "Erreur lors de la récupération de la tournée");
       if (!secteur) return jsonError(404, "Tournée introuvable");
 
-      let pvQ = supabase.from("points_vente").select("id, code, name, address, city, latitude, longitude, secteur_id").eq("secteur_id", secteurId);
-      if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
-      const { data: points } = await pvQ;
-
-      const pvIds = (points || []).map((p: Record<string, unknown>) => p.id);
-      let visQ = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status, status, motif, user_role").in("point_vente_id", pvIds).order("visited_at", { ascending: false });
-      if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
-      else visQ = visQ.eq("superviseur_id", userId);
-      if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
-      const { data: visites } = await visQ;
-
-      let ventQ = supabase.from("ventes").select("id, point_vente_id, created_at").in("point_vente_id", pvIds);
-      if (userRole === "commercial") ventQ = ventQ.eq("commercial_id", userId);
-      else ventQ = ventQ.eq("superviseur_id", userId);
-      if (userTeamId) ventQ = ventQ.eq("team_id", userTeamId);
-      const { data: ventes } = await ventQ;
-
-      let blQ = supabase.from("bons_livraison").select("id, numero, point_vente_id, statut, date_livraison").in("point_vente_id", pvIds);
-      if (userRole === "commercial") blQ = blQ.eq("commercial_id", userId);
-      else blQ = blQ.eq("superviseur_id", userId);
-      if (userTeamId) blQ = blQ.eq("team_id", userTeamId);
-      const { data: bls } = await blQ;
+      const pointResult = await fetchAllRows((from, to) => supabase.from("points_vente")
+        .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id", { count: "exact" })
+        .eq("secteur_id", secteurId).eq("team_id", userTeamId)
+        .order("id", { ascending: true }).range(from, to));
+      if (pointResult.error) return jsonError(500, "Erreur lors de la récupération des POS de la tournée");
+      const points = uniqueById(pointResult.data as Record<string, unknown>[]);
+      const pvIds = points.map((point) => String(point.id));
+      const visitsResult = await fetchRowsForIds(pvIds, (batch, from, to) => {
+        let query = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status, status, motif, user_role", { count: "exact" })
+          .in("point_vente_id", batch).eq("team_id", userTeamId).order("visited_at", { ascending: false }).range(from, to);
+        if (userRole === "commercial") query = query.eq("commercial_id", userId);
+        else query = query.eq("superviseur_id", userId);
+        return query;
+      });
+      if (visitsResult.error) return jsonError(500, "Erreur lors de la récupération des visites de tournée");
+      const salesResult = await fetchRowsForIds(pvIds, (batch, from, to) => {
+        let query = supabase.from("ventes").select("id, point_vente_id, created_at", { count: "exact" })
+          .in("point_vente_id", batch).eq("team_id", userTeamId).order("created_at", { ascending: false }).range(from, to);
+        if (userRole === "commercial") query = query.eq("commercial_id", userId);
+        else query = query.eq("superviseur_id", userId);
+        return query;
+      });
+      if (salesResult.error) return jsonError(500, "Erreur lors de la récupération des ventes de tournée");
+      const blResult = await fetchRowsForIds(pvIds, (batch, from, to) => {
+        let query = supabase.from("bons_livraison").select("id, numero, point_vente_id, statut, date_livraison", { count: "exact" })
+          .in("point_vente_id", batch).eq("team_id", userTeamId).order("date_livraison", { ascending: false }).range(from, to);
+        if (userRole === "commercial") query = query.eq("commercial_id", userId);
+        else query = query.eq("superviseur_id", userId);
+        return query;
+      });
+      if (blResult.error) return jsonError(500, "Erreur lors de la récupération des bons de livraison de tournée");
+      const visites = visitsResult.data as Record<string, unknown>[];
+      const ventes = salesResult.data as Record<string, unknown>[];
+      const bls = blResult.data as Record<string, unknown>[];
 
       const visByPv = new Map<string, Record<string, unknown>>();
       for (const v of (visites || []) as Record<string, unknown>[]) {
@@ -2233,10 +2775,10 @@ async function handleRoute(req: Request): Promise<Response> {
       const venteByPv = new Set((ventes || []).map((v: Record<string, unknown>) => String(v.point_vente_id)));
       const blByPv = new Map<string, Record<string, unknown>>();
       for (const bl of (bls || []) as Record<string, unknown>[]) {
-        blByPv.set(String(bl.point_vente_id), bl);
+        if (!blByPv.has(String(bl.point_vente_id))) blByPv.set(String(bl.point_vente_id), bl);
       }
 
-      const enrichedPoints = (points || []).map((p: Record<string, unknown>) => {
+      const enrichedPoints = points.map((p: Record<string, unknown>) => {
         const pId = String(p.id);
         const lastVisite = visByPv.get(pId);
         return {
@@ -2268,42 +2810,42 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MES POINTS DE VENTE (commercial + superviseur) ---
     if (path === "/mes-points-vente" && method === "GET") {
-      const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
-      const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
-      let assignments = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, userId);
-      if (userTeamId) assignments = assignments.eq("team_id", userTeamId);
-      const { data: assignmentRows } = await assignments;
-      const secteurIds = (assignmentRows ?? []).map((row: Record<string, unknown>) => String(row.secteur_id));
-      if (secteurIds.length === 0) return jsonResponse([]);
-
-      let pvQ = supabase.from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, secteur_id")
-        .in("secteur_id", secteurIds)
-        .order("name", { ascending: true });
-      if (userTeamId) pvQ = pvQ.eq("team_id", userTeamId);
-      const { data: points, error: pvErr } = await pvQ;
-      if (pvErr) return jsonError(500, "Erreur de lecture");
-
-      const pvIds = (points || []).map((p: Record<string, unknown>) => p.id);
-      const secIds = [...new Set((points || []).map((p: Record<string, unknown>) => p.secteur_id).filter(Boolean))] as string[];
-      let secteurMap: Record<string, Record<string, unknown>> = {};
-      if (secIds.length > 0) {
-        let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secIds);
-        if (userTeamId) secQuery = secQuery.eq("team_id", userTeamId);
-        const { data: secteurs } = await secQuery;
-        for (const s of (secteurs || []) as Record<string, unknown>[]) secteurMap[String(s.id)] = s;
+      if (userRole === "commercial") {
+        const result = await getAssignedPOSForCommercial(userId, userTeamId);
+        if (result.error || !result.points || !result.pagination) {
+          return jsonError(500, result.error || "Erreur lors de la récupération des points de vente");
+        }
+        return jsonResponse(result.points, 200, paginationHeaders(result.pagination));
       }
-      let visQ = supabase.from("visites").select("id, point_vente_id, visited_at, vente_status").in("point_vente_id", pvIds).order("visited_at", { ascending: false });
-      if (userRole === "commercial") visQ = visQ.eq("commercial_id", userId);
-      else visQ = visQ.eq("superviseur_id", userId);
-      if (userTeamId) visQ = visQ.eq("team_id", userTeamId);
-      const { data: visites } = await visQ;
-
-      let ventQ = supabase.from("ventes").select("id, point_vente_id, created_at").in("point_vente_id", pvIds);
-      if (userRole === "commercial") ventQ = ventQ.eq("commercial_id", userId);
-      else ventQ = ventQ.eq("superviseur_id", userId);
-      if (userTeamId) ventQ = ventQ.eq("team_id", userTeamId);
-      const { data: ventes } = await ventQ;
+      if (userRole !== "superviseur") return jsonError(403, "Rôle non autorisé");
+      const result = await getAssignedPOSForSupervisor(userId, userTeamId);
+      if (result.error || !result.points || !result.secteurs || !result.pagination) {
+        return jsonError(500, result.error || "Erreur lors de la récupération des points de vente");
+      }
+      const points = result.points as Record<string, unknown>[];
+      const pvIds = points.map((point) => String(point.id));
+      const secteurMap = new Map((result.secteurs as Record<string, unknown>[])
+        .map((secteur) => [String(secteur.id), secteur]));
+      const visitsResult = await fetchRowsForIds(pvIds, (batch, from, to) => supabase
+        .from("visites")
+        .select("id, point_vente_id, visited_at, vente_status", { count: "exact" })
+        .in("point_vente_id", batch)
+        .eq("superviseur_id", userId)
+        .eq("team_id", userTeamId!)
+        .order("visited_at", { ascending: false })
+        .range(from, to));
+      if (visitsResult.error) return jsonError(500, "Erreur lors de la récupération des visites");
+      const salesResult = await fetchRowsForIds(pvIds, (batch, from, to) => supabase
+        .from("ventes")
+        .select("id, point_vente_id, created_at", { count: "exact" })
+        .in("point_vente_id", batch)
+        .eq("superviseur_id", userId)
+        .eq("team_id", userTeamId!)
+        .order("created_at", { ascending: false })
+        .range(from, to));
+      if (salesResult.error) return jsonError(500, "Erreur lors de la récupération des ventes");
+      const visites = visitsResult.data as Record<string, unknown>[];
+      const ventes = salesResult.data as Record<string, unknown>[];
 
       const visByPv = new Map<string, Record<string, unknown>>();
       for (const v of (visites || []) as Record<string, unknown>[]) {
@@ -2312,7 +2854,7 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       const venteByPv = new Set((ventes || []).map((v: Record<string, unknown>) => String(v.point_vente_id)));
 
-      const enriched = (points || []).map((p: Record<string, unknown>) => {
+      const enriched = points.map((p: Record<string, unknown>) => {
         const pId = String(p.id);
         const lastVisite = visByPv.get(pId);
         const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
@@ -2320,6 +2862,12 @@ async function handleRoute(req: Request): Promise<Response> {
           id: p.id,
           code: p.code,
           name: p.name,
+          secteur_id: p.secteur_id,
+          team_id: p.team_id,
+          active: p.active,
+          created_by: p.created_by,
+          created_by_role: p.created_by_role,
+          created_at: p.created_at,
           address: p.address,
           city: p.city,
           latitude: p.latitude,
@@ -2333,7 +2881,7 @@ async function handleRoute(req: Request): Promise<Response> {
           statut: lastVisite ? "visite" : "non_visite",
         };
       });
-      return jsonResponse(enriched);
+      return jsonResponse(enriched, 200, paginationHeaders(result.pagination));
     }
 
     // --- CREATE POINT DE VENTE (field users) ---
@@ -2374,12 +2922,13 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("use_geolocation"); if (denied) return denied;
       const { latitude, longitude, radius } = await req.json();
       if (typeof latitude !== "number" || typeof longitude !== "number") return jsonError(400, "Coordonnées GPS invalides");
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour rechercher les POS proches");
       const maxRadius = Math.min(Math.max(typeof radius === "number" ? radius : 500, 50), 5000);
-      let query = supabase.from("points_vente").select("id, code, name, address, city, latitude, longitude, secteur_id, qr_token");
-      if (userTeamId) query = query.eq("team_id", userTeamId);
-      const { data: allPoints, error } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      const nearby = (allPoints || [])
+      const pointResult = await fetchAllRows((from, to) => supabase.from("points_vente")
+        .select("id, code, name, address, city, latitude, longitude, secteur_id, qr_token, team_id", { count: "exact" })
+        .eq("team_id", userTeamId).order("id", { ascending: true }).range(from, to));
+      if (pointResult.error) return jsonError(500, "Erreur de lecture");
+      const nearby = uniqueById(pointResult.data as Record<string, unknown>[])
         .filter((p: Record<string, unknown>) => typeof p.latitude === "number" && typeof p.longitude === "number")
         .map((p: Record<string, unknown>) => ({
           ...p,
@@ -2555,15 +3104,16 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("search_point_vente"); if (denied) return denied;
       const q = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       if (!q || q.length < 2) return jsonResponse([]);
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour rechercher les POS");
       const qNorm = normalizeAccents(q);
-      let query = supabase
+      const result = await fetchAllRows((from, to) => supabase
         .from("points_vente")
-        .select("id, code, name, address, city, latitude, longitude, secteur_id")
-        .limit(100);
-      if (userTeamId) query = query.eq("team_id", userTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur de recherche");
-      const filtered = (data || []).filter((p: Record<string, unknown>) => {
+        .select("id, code, name, address, city, latitude, longitude, secteur_id, team_id", { count: "exact" })
+        .eq("team_id", userTeamId)
+        .order("id", { ascending: true })
+        .range(from, to));
+      if (result.error) return jsonError(500, "Erreur de recherche");
+      const filtered = uniqueById(result.data as Record<string, unknown>[]).filter((p: Record<string, unknown>) => {
         const name = normalizeAccents(String(p.name || ""));
         const code = normalizeAccents(String(p.code || ""));
         const city = normalizeAccents(String(p.city || ""));
@@ -2627,7 +3177,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (cmdErr) return jsonError(500, "Erreur de lecture");
 
       const secIds = [...new Set((commandes || []).map((c: Record<string, unknown>) => c.secteur_id).filter(Boolean))] as string[];
-      let secteurMap: Record<string, Record<string, unknown>> = {};
+      const secteurMap: Record<string, Record<string, unknown>> = {};
       if (secIds.length > 0) {
         let secQuery = supabase.from("secteurs").select("id, nom, code, color_code").in("id", secIds);
         if (userTeamId) secQuery = secQuery.eq("team_id", userTeamId);
@@ -2676,8 +3226,8 @@ function getBearerToken(req: Request): string | null {
   return auth.slice(7).trim();
 }
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+function jsonResponse(data: unknown, status = 200, additionalHeaders: HeadersInit = {}): Response {
+  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, "Content-Type": "application/json", ...additionalHeaders } });
 }
 
 function jsonError(status: number, message: string): Response {

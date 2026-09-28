@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import jsPDF from "jspdf";
 import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation, Calendar, User, Filter, X, AlertTriangle, Archive, Power } from "lucide-react";
 import { api } from "@/lib/api";
-import type { PointVente, Secteur, Commercial, Superviseur, Team } from "@/types";
+import type { PointVente, Secteur, Commercial, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { getAccuratePosition } from "@/lib/gps";
 import { useAuth } from "@/lib/auth";
@@ -19,13 +19,12 @@ interface DuplicateMatch {
 }
 
 export function AdminPointsVente() {
-  const { teamCode, isSuperAdmin, hasPermission } = useAuth();
+  const { teamCode } = useAuth();
   const isYaourt = teamCode === "YAOURT";
   const [points, setPoints] = useState<PointVente[]>([]);
   const [secteurs, setSecteurs] = useState<Secteur[]>([]);
   const [commerciaux, setCommerciaux] = useState<Commercial[]>([]);
   const [superviseurs, setSuperviseurs] = useState<Superviseur[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterSecteur, setFilterSecteur] = useState("");
@@ -46,26 +45,24 @@ export function AdminPointsVente() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const load = () => {
+  const load = (commercialId = filterCommercial) => {
     setLoading(true);
     Promise.all([
-      api.listPointsVente(),
+      api.listPointsVente(commercialId ? { commercial_id: commercialId } : undefined),
       api.listSecteurs(),
       api.listCommerciaux(),
       api.listSuperviseurs(),
-      ...(isSuperAdmin ? [api.listTeams()] : []),
     ])
-      .then(([p, s, c, sup, t]) => {
+      .then(([p, s, c, sup]) => {
         setPoints(p);
         setSecteurs(s);
         setCommerciaux(c);
         setSuperviseurs(sup);
-        if (t) setTeams(t as Team[]);
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filterCommercial); }, [filterCommercial]);
 
   // Build a lookup from secteur_id to commercial name and superviseur name
   const secteurToCommercial: Record<string, string> = {};
@@ -85,11 +82,6 @@ export function AdminPointsVente() {
     }
   }
 
-  // Get the set of secteur IDs assigned to the selected commercial
-  const commercialSecteurIds = filterCommercial
-    ? new Set(commerciaux.find((c) => c.id === filterCommercial)?.tournees?.map((t) => t.secteur_id) || [])
-    : null;
-
   // Get the set of secteur IDs assigned to the selected superviseur
   const superviseurSecteurIds = filterSuperviseur
     ? new Set(superviseurs.find((s) => s.id === filterSuperviseur)?.tournees?.map((t) => t.secteur_id) || [])
@@ -105,9 +97,8 @@ export function AdminPointsVente() {
     const matchesActive = !filterActive ||
       (filterActive === "active" && p.active !== false) ||
       (filterActive === "inactive" && p.active === false);
-    const matchesCommercial = !commercialSecteurIds || (p.secteur_id && commercialSecteurIds.has(p.secteur_id));
     const matchesSuperviseur = !superviseurSecteurIds || (p.secteur_id && superviseurSecteurIds.has(p.secteur_id));
-    return matchesSearch && matchesSecteur && matchesActive && matchesCommercial && matchesSuperviseur;
+    return matchesSearch && matchesSecteur && matchesActive && matchesSuperviseur;
   });
 
   const activeFilters = !!(filterSecteur || filterCommercial || filterSuperviseur || filterActive);

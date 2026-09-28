@@ -211,12 +211,37 @@ export interface PointVente {
   secteur_color?: string | null;
   team_id?: string | null;
   active?: boolean | null;
+  created_by?: string | null;
+  created_by_role?: string | null;
   frigo_comtesse?: boolean | null;
   commercial_nom?: string | null;
   created_by_name?: string | null;
-  created_by_role?: string | null;
   created_at: string;
   updated_at?: string;
+}
+
+export interface PosListPagination {
+  recordsReceived: number;
+  reportedTotal: number;
+  pagesFetched: number;
+  pageSize: number;
+  truncated: boolean;
+}
+
+export interface CommercialPointsVenteDiagnostic {
+  commercial: {
+    id: string;
+    full_name: string;
+    team_id: string | null;
+    team_code: string | null;
+    team_name: string | null;
+    active: boolean;
+    superviseur_id: string | null;
+    superviseur_nom: string | null;
+    secteurs: { id: string; nom: string | null; code: string | null }[];
+  };
+  points: MesPointVente[];
+  pagination: PosListPagination;
 }
 
 export type VenteStatus =
@@ -334,6 +359,10 @@ export interface DashboardStats {
   totalSuperviseurs: number;
   totalSecteurs: number;
   totalPointsVente: number;
+  totalPointsVenteActifs: number;
+  totalPointsVenteDesactives: number;
+  totalPointsVenteAvecGps: number;
+  totalPointsVenteSansGps: number;
   visitesToday: number;
   outOfZoneToday: number;
   promessesToday: number;
@@ -368,6 +397,8 @@ export interface TeamStats {
     full_name: string;
     active: boolean;
     points_vente: number;
+    points_vente_affectes: number;
+    points_vente_visites: number;
     points_vente_crees: number;
     visites: number;
     ventes: number;
@@ -379,6 +410,7 @@ export interface TeamStats {
     full_name: string;
     active: boolean;
     points_vente: number;
+    points_vente_livres: number;
     commandes: number;
     livrees: number;
     en_cours: number;
@@ -389,6 +421,8 @@ export interface TeamStats {
     full_name: string;
     active: boolean;
     points_vente: number;
+    points_vente_affectes: number;
+    points_vente_visites: number;
     points_vente_crees: number;
     visites: number;
     ventes: number;
@@ -452,8 +486,14 @@ export interface MesPointVente {
   id: string;
   code: string;
   name: string;
+  secteur_id?: string | null;
   address: string;
   city: string;
+  team_id?: string | null;
+  active?: boolean | null;
+  created_by?: string | null;
+  created_by_role?: string | null;
+  created_at?: string | null;
   telephone: string | null;
   latitude: number;
   longitude: number;

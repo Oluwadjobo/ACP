@@ -15,10 +15,10 @@ function getToken(): string | null {
 
 let teamsPromise: Promise<import("@/types").Team[]> | null = null;
 
-async function apiRequest<T>(
+async function apiRequestWithHeaders<T>(
   path: string,
   options: RequestInit = {}
-): Promise<T> {
+): Promise<{ data: T; headers: Headers }> {
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -39,7 +39,14 @@ async function apiRequest<T>(
     throw new Error(data.error || `Erreur ${response.status}`);
   }
 
-  return data as T;
+  return { data: data as T, headers: response.headers };
+}
+
+async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  return (await apiRequestWithHeaders<T>(path, options)).data;
 }
 
 export const api = {
@@ -198,14 +205,37 @@ export const api = {
     apiRequest<{ success: boolean }>(`/produits/${id}`, { method: "DELETE" }),
 
   // Admin - Points de vente
-  listPointsVente: (params?: { active?: boolean; secteur_id?: string; q?: string }) => {
+  listPointsVente: (params?: { active?: boolean; secteur_id?: string; q?: string; commercial_id?: string }) => {
     const qs = new URLSearchParams();
     if (params?.active !== undefined) qs.set("active", String(params.active));
     if (params?.secteur_id) qs.set("secteur_id", params.secteur_id);
     if (params?.q) qs.set("q", params.q);
+    if (params?.commercial_id) qs.set("commercial_id", params.commercial_id);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiRequest<import("@/types").PointVente[]>(`/points-vente${suffix}`, { method: "GET" });
   },
+
+  listPointsVenteForDiagnostic: async (commercialId?: string) => {
+    const qs = new URLSearchParams({ diagnostic: "true" });
+    if (commercialId) qs.set("commercial_id", commercialId);
+    const response = await apiRequestWithHeaders<import("@/types").PointVente[]>(`/points-vente?${qs.toString()}`, { method: "GET" });
+    return {
+      data: response.data,
+      pagination: {
+        recordsReceived: Number(response.headers.get("X-Records-Received") || response.data.length),
+        reportedTotal: Number(response.headers.get("X-Reported-Total") || response.data.length),
+        pagesFetched: Number(response.headers.get("X-Pages-Fetched") || 1),
+        pageSize: Number(response.headers.get("X-Page-Size") || response.data.length),
+        truncated: response.headers.get("X-Truncated") === "true",
+      },
+    };
+  },
+
+  diagnoseCommercialPointsVente: (commercialId: string) =>
+    apiRequest<import("@/types").CommercialPointsVenteDiagnostic>("/diagnostics/commercial-points-vente", {
+      method: "POST",
+      body: JSON.stringify({ commercial_id: commercialId }),
+    }),
 
   createPointVente: (body: {
     name: string;

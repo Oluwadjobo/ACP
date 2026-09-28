@@ -1,6 +1,6 @@
 import { type ReactNode, useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Leaf, Truck, ClipboardList, BarChart3 } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Leaf, Truck, ClipboardList, BarChart3, ClipboardCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Permission, Team } from "@/types";
@@ -17,6 +17,7 @@ const allNavItems: NavItem[] = [
   { path: "/admin/carte", label: "Carte", icon: MapIcon, permission: "view_carte" },
   { path: "/admin/secteurs", label: "Tournées", icon: MapPin, permission: "manage_secteurs" },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
+  { path: "/admin/diagnostic-pos", label: "Diagnostic POS", icon: ClipboardCheck, permission: "manage_points_vente" },
   { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
   { path: "/admin/agents-livreur", label: "Agents livreur", icon: Truck, permission: "manage_agents_livreur" },
   { path: "/admin/commandes", label: "Commandes", icon: ClipboardList, permission: "view_dashboard" },
@@ -79,7 +80,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   };
 
   const activeTeam = teams.find((t) => t.id === teamId);
-  const activeTeamCode = activeTeam?.code || "";
   const activeTeamLabel = activeTeam ? TEAM_LABELS[activeTeam.code] || activeTeam.name : "Vue globale";
   const ActiveTeamIcon = activeTeam ? TEAM_ICONS[activeTeam.code] || Milk : Globe;
 

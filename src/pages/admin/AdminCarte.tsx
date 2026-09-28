@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers, ChevronDown, ChevronUp, Navigation } from "lucide-react";
+import { Map as MapIcon, Store, MapPin, Loader2, Search, Maximize2, Minimize2, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
@@ -86,7 +86,7 @@ export function AdminCarte() {
   useEffect(() => {
     Promise.all([api.listPointsVente(), api.listSecteurs()])
       .then(([pts, secs]) => {
-        setPoints(pts);
+        setPoints([...new Map(pts.map((point) => [point.id, point])).values()]);
         setSecteurs(secs);
       })
       .catch((err) => {
@@ -332,19 +332,21 @@ export function AdminCarte() {
                     })}
                   </div>
                   <div className="mt-2 pt-2 border-t border-gray-200 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-gray-600">Total points de vente</span>
+                    <span className="text-xs font-semibold text-gray-600">Total POS équipe</span>
                     <span className="text-xs font-bold text-gray-900">{points.length}</span>
                   </div>
                   <div className="mt-1 flex items-center justify-between">
-                    <span className="text-xs text-gray-500">Affichés sur la carte</span>
+                    <span className="text-xs text-gray-500">POS avec GPS (marqueurs filtrés inclus)</span>
+                    <span className="text-xs font-medium text-gray-500">{validPoints.length}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-xs text-warning-600">POS sans GPS valide</span>
+                    <span className="text-xs font-bold text-warning-600">{invalidCount}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="text-xs text-gray-500">Marqueurs affichés (recherche incluse)</span>
                     <span className="text-xs font-medium text-gray-500">{totalVisible}</span>
                   </div>
-                  {invalidCount > 0 && (
-                    <div className="mt-1 flex items-center justify-between">
-                      <span className="text-xs text-warning-600">GPS indisponible</span>
-                      <span className="text-xs font-bold text-warning-600">{invalidCount}</span>
-                    </div>
-                  )}
                 </>
               )}
             </div>

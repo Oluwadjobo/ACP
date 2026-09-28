@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Store, Users, TrendingUp, Package, Truck, ClipboardCheck, BarChart3, UserCog, UserCheck, UserX, Calendar, Download, FileText, FileSpreadsheet, RotateCcw, MapPin, AlertTriangle, ShoppingCart, CheckCircle, Clock, XCircle, Gift } from "lucide-react";
+import { Store, Users, TrendingUp, Package, Truck, ClipboardCheck, BarChart3, UserCog, UserCheck, UserX, Calendar, Download, FileText, FileSpreadsheet, RotateCcw, AlertTriangle, ShoppingCart, CheckCircle, Clock, XCircle, Gift } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TeamStats } from "@/types";
 import { useAuth } from "@/lib/auth";
@@ -111,12 +111,12 @@ export function AdminTeamStats() {
 
   const exportCsv = () => {
     if (!stats) return;
-    const headers = ["Catégorie", "Nom", "Statut", "PDV créés", "PDV visités", "Visites", "Ventes", "Ventes non réalisées", "Promesses", "Contrôles", "Commandes", "Livrées", "En cours", "Livraisons"];
+    const headers = ["Catégorie", "Nom", "Statut", "POS affectés", "POS marqués créés", "POS visités", "Visites", "Ventes", "Ventes non réalisées", "Promesses", "Contrôles", "Commandes", "Livrées", "En cours", "Livraisons"];
     const rows: string[][] = [];
-    stats.commerciaux.forEach(c => rows.push(["Commercial", c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_crees), String(c.points_vente), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses), "", "", "", "", ""]));
-    stats.agents_livreur.forEach(a => rows.push(["Agent livreur", a.full_name, a.active ? "Actif" : "Inactif", "", String(a.points_vente), "", "", "", "", "", String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
-    stats.superviseurs.forEach(s => rows.push(["Team Leader", s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_crees), String(s.points_vente), String(s.visites), String(s.ventes), "", "", String(s.controles), "", "", "", ""]));
-    rows.push(["TOTAUX", "", "", "", String(stats.totals.points_vente_visites ?? stats.totals.points_vente), String(stats.totals.visites), String(stats.totals.ventes), String(stats.totals.visites_non_validees ?? 0), String(stats.totals.promesses ?? 0), String(stats.totals.controles), String(stats.totals.commandes), String(stats.totals.bl_livres ?? 0), String(stats.totals.bl_en_attente ?? 0), String(stats.totals.livraisons)]);
+    stats.commerciaux.forEach(c => rows.push(["Commercial", c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_affectes), String(c.points_vente_crees), String(c.points_vente_visites), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses), "", "", "", "", ""]));
+    stats.agents_livreur.forEach(a => rows.push(["Agent livreur", a.full_name, a.active ? "Actif" : "Inactif", "", "", String(a.points_vente_livres), "", "", "", "", "", String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
+    stats.superviseurs.forEach(s => rows.push(["Team Leader", s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_affectes), String(s.points_vente_crees), String(s.points_vente_visites), String(s.visites), String(s.ventes), "", "", String(s.controles), "", "", "", ""]));
+    rows.push(["TOTAUX", "", "", "", "", String(stats.totals.points_vente_visites ?? stats.totals.points_vente), String(stats.totals.visites), String(stats.totals.ventes), String(stats.totals.visites_non_validees ?? 0), String(stats.totals.promesses ?? 0), String(stats.totals.controles), String(stats.totals.commandes), String(stats.totals.bl_livres ?? 0), String(stats.totals.bl_en_attente ?? 0), String(stats.totals.livraisons)]);
 
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -189,16 +189,16 @@ export function AdminTeamStats() {
       };
 
       drawTable("Commerciaux",
-        ["Nom", "Statut", "PDV créés", "PDV visités", "Visites", "Ventes", "Non réa.", "Prom."],
-        stats.commerciaux.map(c => [c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_crees), String(c.points_vente), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses)]));
+        ["Nom", "Statut", "POS affectés", "POS marqués créés", "POS visités", "Visites", "Ventes", "Non réa.", "Prom."],
+        stats.commerciaux.map(c => [c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_affectes), String(c.points_vente_crees), String(c.points_vente_visites), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses)]));
 
       drawTable("Agents livreur",
         ["Nom", "Statut", "PDV livrés", "Commandes", "Livrées", "En cours", "Livraisons"],
-        stats.agents_livreur.map(a => [a.full_name, a.active ? "Actif" : "Inactif", String(a.points_vente), String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
+        stats.agents_livreur.map(a => [a.full_name, a.active ? "Actif" : "Inactif", String(a.points_vente_livres), String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
 
       drawTable("Team Leaders",
-        ["Nom", "Statut", "PDV créés", "PDV visités", "Visites", "Ventes", "Contrôles"],
-        stats.superviseurs.map(s => [s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_crees), String(s.points_vente), String(s.visites), String(s.ventes), String(s.controles)]));
+        ["Nom", "Statut", "POS affectés", "POS marqués créés", "POS visités", "Visites", "Ventes", "Contrôles"],
+        stats.superviseurs.map(s => [s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_affectes), String(s.points_vente_crees), String(s.points_vente_visites), String(s.visites), String(s.ventes), String(s.controles)]));
 
       pdf.save(`statistiques_${teamCode || "equipe"}_${dateStart || "debut"}_${dateEnd || "fin"}.pdf`);
       } catch (e) { console.error("PDF export error:", e); }
@@ -209,12 +209,12 @@ export function AdminTeamStats() {
     if (!stats) return;
     setExporting(true);
     try {
-      const headers = ["Catégorie", "Nom", "Statut", "PDV créés", "PDV visités", "Visites", "Ventes", "Ventes non réalisées", "Promesses", "Contrôles", "Commandes", "Livrées", "En cours", "Livraisons"];
+      const headers = ["Catégorie", "Nom", "Statut", "POS affectés", "POS marqués créés", "POS visités", "Visites", "Ventes", "Ventes non réalisées", "Promesses", "Contrôles", "Commandes", "Livrées", "En cours", "Livraisons"];
       const rows: string[][] = [];
-      stats.commerciaux.forEach(c => rows.push(["Commercial", c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_crees), String(c.points_vente), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses), "", "", "", "", ""]));
-      stats.agents_livreur.forEach(a => rows.push(["Agent livreur", a.full_name, a.active ? "Actif" : "Inactif", "", String(a.points_vente), "", "", "", "", "", String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
-      stats.superviseurs.forEach(s => rows.push(["Team Leader", s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_crees), String(s.points_vente), String(s.visites), String(s.ventes), "", "", String(s.controles), "", "", "", ""]));
-      rows.push(["TOTAUX", "", "", "", String(stats.totals.points_vente_visites ?? stats.totals.points_vente), String(stats.totals.visites), String(stats.totals.ventes), String(stats.totals.visites_non_validees ?? 0), String(stats.totals.promesses ?? 0), String(stats.totals.controles), String(stats.totals.commandes), String(stats.totals.bl_livres ?? 0), String(stats.totals.bl_en_attente ?? 0), String(stats.totals.livraisons)]);
+      stats.commerciaux.forEach(c => rows.push(["Commercial", c.full_name, c.active ? "Actif" : "Inactif", String(c.points_vente_affectes), String(c.points_vente_crees), String(c.points_vente_visites), String(c.visites), String(c.ventes), String(c.ventes_non_realisees), String(c.promesses), "", "", "", "", ""]));
+      stats.agents_livreur.forEach(a => rows.push(["Agent livreur", a.full_name, a.active ? "Actif" : "Inactif", "", "", String(a.points_vente_livres), "", "", "", "", "", String(a.commandes), String(a.livrees), String(a.en_cours), String(a.livraisons)]));
+      stats.superviseurs.forEach(s => rows.push(["Team Leader", s.full_name, s.active ? "Actif" : "Inactif", String(s.points_vente_affectes), String(s.points_vente_crees), String(s.points_vente_visites), String(s.visites), String(s.ventes), "", "", String(s.controles), "", "", "", ""]));
+      rows.push(["TOTAUX", "", "", "", "", String(stats.totals.points_vente_visites ?? stats.totals.points_vente), String(stats.totals.visites), String(stats.totals.ventes), String(stats.totals.visites_non_validees ?? 0), String(stats.totals.promesses ?? 0), String(stats.totals.controles), String(stats.totals.commandes), String(stats.totals.bl_livres ?? 0), String(stats.totals.bl_en_attente ?? 0), String(stats.totals.livraisons)]);
 
       let html = `<table xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><thead><tr>`;
       headers.forEach(h => html += `<th style="background:#0d1b5e;color:white;font-weight:bold;padding:4px;">${h}</th>`);
@@ -365,8 +365,9 @@ export function AdminTeamStats() {
                 <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                   <th className="px-6 py-3 font-medium">Commercial</th>
                   <th className="px-4 py-3 font-medium text-center">Statut</th>
-                  <th className="px-4 py-3 font-medium text-center">PDV créés</th>
-                  <th className="px-4 py-3 font-medium text-center">PDV visités</th>
+                  <th className="px-4 py-3 font-medium text-center">POS affectés</th>
+                  <th className="px-4 py-3 font-medium text-center">POS marqués créés</th>
+                  <th className="px-4 py-3 font-medium text-center">POS visités</th>
                   <th className="px-4 py-3 font-medium text-center">Visites</th>
                   <th className="px-4 py-3 font-medium text-center">Ventes</th>
                   <th className="px-4 py-3 font-medium text-center">Non réalisées</th>
@@ -387,8 +388,9 @@ export function AdminTeamStats() {
                     <td className="px-4 py-4 text-center">
                       {c.active ? <UserCheck size={16} className="inline text-success-500" /> : <UserX size={16} className="inline text-gray-400" />}
                     </td>
+                    <td className="px-4 py-4 text-center font-semibold text-blue-700">{c.points_vente_affectes}</td>
                     <td className="px-4 py-4 text-center font-semibold text-primary-700">{c.points_vente_crees}</td>
-                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{c.points_vente}</td>
+                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{c.points_vente_visites}</td>
                     <td className="px-4 py-4 text-center text-gray-700">{c.visites}</td>
                     <td className="px-4 py-4 text-center font-semibold text-success-600">{c.ventes}</td>
                     <td className="px-4 py-4 text-center text-error-500">{c.ventes_non_realisees}</td>
@@ -416,7 +418,7 @@ export function AdminTeamStats() {
                 <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                   <th className="px-6 py-3 font-medium">Agent livreur</th>
                   <th className="px-4 py-3 font-medium text-center">Statut</th>
-                  <th className="px-4 py-3 font-medium text-center">PDV livrés</th>
+                  <th className="px-4 py-3 font-medium text-center">POS liés aux livraisons</th>
                   <th className="px-4 py-3 font-medium text-center">Commandes</th>
                   <th className="px-4 py-3 font-medium text-center">Livrées</th>
                   <th className="px-4 py-3 font-medium text-center">En cours</th>
@@ -437,7 +439,7 @@ export function AdminTeamStats() {
                     <td className="px-4 py-4 text-center">
                       {a.active ? <UserCheck size={16} className="inline text-success-500" /> : <UserX size={16} className="inline text-gray-400" />}
                     </td>
-                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{a.points_vente}</td>
+                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{a.points_vente_livres}</td>
                     <td className="px-4 py-4 text-center text-gray-700">{a.commandes}</td>
                     <td className="px-4 py-4 text-center font-semibold text-success-600">{a.livrees}</td>
                     <td className="px-4 py-4 text-center text-warning-600">{a.en_cours}</td>
@@ -465,8 +467,9 @@ export function AdminTeamStats() {
                 <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                   <th className="px-6 py-3 font-medium">Team Leader</th>
                   <th className="px-4 py-3 font-medium text-center">Statut</th>
-                  <th className="px-4 py-3 font-medium text-center">PDV créés</th>
-                  <th className="px-4 py-3 font-medium text-center">PDV visités</th>
+                  <th className="px-4 py-3 font-medium text-center">POS affectés</th>
+                  <th className="px-4 py-3 font-medium text-center">POS marqués créés</th>
+                  <th className="px-4 py-3 font-medium text-center">POS visités</th>
                   <th className="px-4 py-3 font-medium text-center">Visites</th>
                   <th className="px-4 py-3 font-medium text-center">Ventes</th>
                   <th className="px-4 py-3 font-medium text-center">Contrôles</th>
@@ -486,8 +489,9 @@ export function AdminTeamStats() {
                     <td className="px-4 py-4 text-center">
                       {s.active ? <UserCheck size={16} className="inline text-success-500" /> : <UserX size={16} className="inline text-gray-400" />}
                     </td>
+                    <td className="px-4 py-4 text-center font-semibold text-blue-700">{s.points_vente_affectes}</td>
                     <td className="px-4 py-4 text-center font-semibold text-primary-700">{s.points_vente_crees}</td>
-                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{s.points_vente}</td>
+                    <td className="px-4 py-4 text-center font-semibold text-accent-700">{s.points_vente_visites}</td>
                     <td className="px-4 py-4 text-center text-gray-700">{s.visites}</td>
                     <td className="px-4 py-4 text-center font-semibold text-success-600">{s.ventes}</td>
                     <td className="px-4 py-4 text-center text-warning-600">{s.controles}</td>
