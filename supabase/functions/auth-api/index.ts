@@ -980,6 +980,11 @@ async function handleRoute(req: Request): Promise<Response> {
       return jsonError(403, "Vous n'avez pas l'autorisation d'effectuer cette action");
     }
 
+    function requireSuperAdmin(): Response | null {
+      if (adminRole === "super_admin") return null;
+      return jsonError(403, "Réservé au super administrateur");
+    }
+
     // Only a super administrator may act on another super administrator's account.
     async function guardSuperAdminTarget(targetId: string): Promise<Response | null> {
       if (adminRole === "super_admin") return null;
@@ -991,7 +996,7 @@ async function handleRoute(req: Request): Promise<Response> {
     }
 
     if (path === "/diagnostics/commercial-points-vente" && method === "POST") {
-      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      { const denied = requireSuperAdmin(); if (denied) return denied; }
       if (!effectiveTeamId) return jsonError(400, "Sélectionnez une équipe avant de lancer le diagnostic");
 
       const { commercial_id: commercialId } = await req.json();
@@ -1047,7 +1052,7 @@ async function handleRoute(req: Request): Promise<Response> {
     }
 
     if (path === "/diagnostics/test-account-data" && method === "POST") {
-      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+      { const denied = requireSuperAdmin(); if (denied) return denied; }
 
       const targets = ["togni.eau", "comeautest", "Togni"];
       const profileSources = [
@@ -1659,6 +1664,10 @@ async function handleRoute(req: Request): Promise<Response> {
       const searchQ = sanitizeSearchTerm((url.searchParams.get("q") || "").trim());
       const diagnosticMode = url.searchParams.get("diagnostic") === "true";
       const commercialId = url.searchParams.get("commercial_id");
+      if (diagnosticMode) {
+        const denied = requireSuperAdmin();
+        if (denied) return denied;
+      }
       if (commercialId) {
         let assignmentTeamId = effectiveTeamId;
         if (!assignmentTeamId) {
