@@ -237,6 +237,11 @@ export const api = {
       body: JSON.stringify({ commercial_id: commercialId }),
     }),
 
+  auditTestAccountData: () =>
+    apiRequest<import("@/types").TestAccountDataAudit>("/diagnostics/test-account-data", {
+      method: "POST",
+    }),
+
   createPointVente: (body: {
     name: string;
     address: string;

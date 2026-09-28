@@ -18,6 +18,7 @@ const allNavItems: NavItem[] = [
   { path: "/admin/secteurs", label: "Tournées", icon: MapPin, permission: "manage_secteurs" },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
   { path: "/admin/diagnostic-pos", label: "Diagnostic POS", icon: ClipboardCheck, permission: "manage_points_vente" },
+  { path: "/admin/audit-comptes-test", label: "Audit comptes de test", icon: ClipboardCheck, permission: "manage_points_vente" },
   { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
   { path: "/admin/agents-livreur", label: "Agents livreur", icon: Truck, permission: "manage_agents_livreur" },
   { path: "/admin/commandes", label: "Commandes", icon: ClipboardList, permission: "view_dashboard" },

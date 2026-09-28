@@ -1046,6 +1046,235 @@ async function handleRoute(req: Request): Promise<Response> {
       });
     }
 
+    if (path === "/diagnostics/test-account-data" && method === "POST") {
+      { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
+
+      const targets = ["togni.eau", "comeautest", "Togni"];
+      const profileSources = [
+        { table: "commerciaux", role: "commercial", columns: ["identifiant", "full_name"], select: "id, identifiant, full_name, team_id, active, created_at" },
+        { table: "superviseurs", role: "superviseur", columns: ["identifiant", "full_name"], select: "id, identifiant, full_name, team_id, active, created_at" },
+        { table: "agents_livreur", role: "agent_livreur", columns: ["identifiant", "full_name"], select: "id, identifiant, full_name, team_id, active, created_at" },
+        { table: "admins", role: "admin", columns: ["email", "full_name"], select: "id, email, full_name, role, team_id, created_at" },
+      ] as const;
+      const profileReads = await Promise.all(profileSources.flatMap((source) => targets.flatMap((target) =>
+        source.columns.map(async (column) => {
+          const result = await fetchAllRows((from, to) => supabase.from(source.table)
+            .select(source.select, { count: "exact" })
+            .ilike(column, target)
+            .order("id", { ascending: true })
+            .range(from, to));
+          return { role: source.role, target, result };
+        }),
+      )));
+      if (profileReads.some(({ result }) => result.error)) {
+        return jsonError(500, "Erreur lors de la recherche des profils de test");
+      }
+
+      const profileMap = new Map<string, Record<string, unknown>>();
+      for (const { role, target, result } of profileReads) {
+        for (const profile of result.data as Record<string, unknown>[]) {
+          const profileId = String(profile.id);
+          const searchableValues = [profile.identifiant, profile.email, profile.full_name]
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim().toLocaleLowerCase());
+          if (!searchableValues.includes(target.toLocaleLowerCase())) continue;
+          profileMap.set(`${role}:${profileId}`, { ...profile, profile_type: role, matched_target: target });
+        }
+      }
+      const profiles = [...profileMap.values()];
+      const idsFor = (...roles: string[]) => [...new Set(profiles
+        .filter((profile) => roles.includes(String(profile.profile_type)))
+        .map((profile) => String(profile.id)))];
+      const commercialIds = idsFor("commercial");
+      const supervisorIds = idsFor("superviseur");
+      const agentIds = idsFor("agent_livreur");
+      const allProfileIds = [...new Set(profiles.map((profile) => String(profile.id)))];
+
+      const readRelated = async (table: string, column: string, ids: string[], fields: string[]) => {
+        if (ids.length === 0) return { data: [] as Record<string, unknown>[], error: null };
+        const result = await fetchRowsForIds(ids, (batch, from, to) => supabase.from(table)
+          .select(fields.join(", "), { count: "exact" })
+          .in(column, batch)
+          .order("id", { ascending: true })
+          .range(from, to));
+        return { data: result.data as Record<string, unknown>[], error: result.error };
+      };
+      const mergeResults = (...results: { data: Record<string, unknown>[]; error: { message: string } | null }[]) => ({
+        data: uniqueById(results.flatMap((result) => result.data)),
+        error: results.find((result) => result.error)?.error ?? null,
+      });
+
+      const [
+        commercialAssignments, supervisorAssignments,
+        commercialVisits, supervisorVisits,
+        commercialSales, supervisorSales,
+        commercialOrders, agentOrders,
+        commercialDeliveries, agentDeliveries,
+        commercialBills, supervisorBills,
+        promises, controls, agentAssociations, sessions,
+      ] = await Promise.all([
+        readRelated("commercial_tournees", "commercial_id", commercialIds, ["id", "commercial_id", "secteur_id", "team_id", "created_at"]),
+        readRelated("team_leader_tournees", "superviseur_id", supervisorIds, ["id", "superviseur_id", "secteur_id", "team_id", "created_at"]),
+        readRelated("visites", "commercial_id", commercialIds, ["id", "commercial_id", "superviseur_id", "point_vente_id", "team_id", "visited_at", "status", "vente_status"]),
+        readRelated("visites", "superviseur_id", supervisorIds, ["id", "commercial_id", "superviseur_id", "point_vente_id", "team_id", "visited_at", "status", "vente_status"]),
+        readRelated("ventes", "commercial_id", commercialIds, ["id", "visite_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "created_at"]),
+        readRelated("ventes", "superviseur_id", supervisorIds, ["id", "visite_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "created_at"]),
+        readRelated("commandes", "commercial_id", commercialIds, ["id", "code", "point_vente_id", "commercial_id", "agent_livreur_id", "secteur_id", "team_id", "statut", "created_at"]),
+        readRelated("commandes", "agent_livreur_id", agentIds, ["id", "code", "point_vente_id", "commercial_id", "agent_livreur_id", "secteur_id", "team_id", "statut", "created_at"]),
+        readRelated("livraisons", "commercial_id", commercialIds, ["id", "commande_id", "point_vente_id", "commercial_id", "agent_livreur_id", "team_id", "statut_final", "date_livraison", "created_at"]),
+        readRelated("livraisons", "agent_livreur_id", agentIds, ["id", "commande_id", "point_vente_id", "commercial_id", "agent_livreur_id", "team_id", "statut_final", "date_livraison", "created_at"]),
+        readRelated("bons_livraison", "commercial_id", commercialIds, ["id", "numero", "vente_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "statut", "created_at"]),
+        readRelated("bons_livraison", "superviseur_id", supervisorIds, ["id", "numero", "vente_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "statut", "created_at"]),
+        readRelated("promesses_achat", "superviseur_id", supervisorIds, ["id", "visite_id", "superviseur_id", "point_vente_id", "created_at"]),
+        readRelated("controles_terrain", "superviseur_id", supervisorIds, ["id", "superviseur_id", "point_vente_id", "visite_id", "secteur_id", "created_at"]),
+        readRelated("commercial_agent_livreur", "commercial_id", commercialIds, ["id", "commercial_id", "agent_livreur_id", "team_id", "created_at"]),
+        readRelated("sessions", "user_id", allProfileIds, ["id", "user_type", "user_id", "full_name", "expires_at", "created_at"]),
+      ]);
+      const visits = mergeResults(commercialVisits, supervisorVisits);
+      const salesByProfile = mergeResults(commercialSales, supervisorSales);
+      const orders = mergeResults(commercialOrders, agentOrders);
+      const deliveriesByProfile = mergeResults(commercialDeliveries, agentDeliveries);
+      const billsByProfile = mergeResults(commercialBills, supervisorBills);
+      const visitIds = [...new Set(visits.data.map((record) => String(record.id)))];
+      const orderIds = [...new Set(orders.data.map((record) => String(record.id)))];
+      const saleIds = [...new Set(salesByProfile.data.map((record) => String(record.id)))];
+      const [salesByVisit, deliveriesByOrder, billsBySale, promisesByVisit, controlsByVisit, controlsByPoint, commercialAgentLinks, agentCommercialLinks, orderLines, orderHistory, saleLines, billLines] = await Promise.all([
+        readRelated("ventes", "visite_id", visitIds, ["id", "visite_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "created_at"]),
+        readRelated("livraisons", "commande_id", orderIds, ["id", "commande_id", "point_vente_id", "commercial_id", "agent_livreur_id", "team_id", "statut_final", "date_livraison", "created_at"]),
+        readRelated("bons_livraison", "vente_id", saleIds, ["id", "numero", "vente_id", "commercial_id", "superviseur_id", "point_vente_id", "secteur_id", "statut", "created_at"]),
+        readRelated("promesses_achat", "visite_id", visitIds, ["id", "visite_id", "superviseur_id", "point_vente_id", "created_at"]),
+        readRelated("controles_terrain", "visite_id", visitIds, ["id", "superviseur_id", "point_vente_id", "visite_id", "secteur_id", "created_at"]),
+        readRelated("controles_terrain", "point_vente_id", [...new Set([...visits.data, ...salesByProfile.data].map((record) => String(record.point_vente_id)).filter(Boolean))], ["id", "superviseur_id", "point_vente_id", "visite_id", "secteur_id", "created_at"]),
+        readRelated("commercial_agent_livreur", "commercial_id", commercialIds, ["id", "commercial_id", "agent_livreur_id", "team_id", "created_at"]),
+        readRelated("commercial_agent_livreur", "agent_livreur_id", agentIds, ["id", "commercial_id", "agent_livreur_id", "team_id", "created_at"]),
+        readRelated("commande_lignes", "commande_id", orderIds, ["id", "commande_id", "produit_nom", "quantite"]),
+        readRelated("commande_status_history", "commande_id", orderIds, ["id", "commande_id", "ancien_statut", "nouveau_statut", "modifie_par", "user_role", "created_at"]),
+        readRelated("vente_lignes", "vente_id", saleIds, ["id", "vente_id", "produit_nom", "quantite"]),
+        readRelated("bl_lignes", "bl_id", billsByProfile.data.map((record) => String(record.id)), ["id", "bl_id", "produit_nom", "quantite", "unite"]),
+      ]);
+      const sales = mergeResults(salesByProfile, salesByVisit);
+      const deliveries = mergeResults(deliveriesByProfile, deliveriesByOrder);
+      const bills = mergeResults(billsByProfile, billsBySale);
+      const promises = mergeResults(
+        await readRelated("promesses_achat", "superviseur_id", supervisorIds, ["id", "visite_id", "superviseur_id", "point_vente_id", "created_at"]),
+        promisesByVisit,
+      );
+      const controls = mergeResults(
+        await readRelated("controles_terrain", "superviseur_id", supervisorIds, ["id", "superviseur_id", "point_vente_id", "visite_id", "secteur_id", "created_at"]),
+        controlsByVisit,
+        controlsByPoint,
+      );
+      const agentAssociations = mergeResults(commercialAgentLinks, agentCommercialLinks);
+      const relatedResults = [
+        commercialAssignments, supervisorAssignments, visits, sales, orders, deliveries, bills,
+        promises, controls, agentAssociations, sessions,
+        salesByVisit, deliveriesByOrder, billsBySale, promisesByVisit, controlsByVisit, controlsByPoint,
+        commercialAgentLinks, agentCommercialLinks, orderLines, orderHistory, saleLines, billLines,
+      ];
+      if (relatedResults.some((result) => result.error)) {
+        return jsonError(500, "Erreur lors de la récupération des données métier liées aux profils");
+      }
+
+      const sectorIds = [...new Set([
+        ...commercialAssignments.data,
+        ...supervisorAssignments.data,
+      ].map((assignment) => String(assignment.secteur_id)))];
+      const pointIds = [...new Set([
+        ...visits.data, ...sales.data, ...orders.data, ...deliveries.data, ...bills.data,
+        ...promises.data, ...controls.data,
+      ].map((record) => record.point_vente_id).filter((id): id is string => typeof id === "string"))];
+      const sectorResult = sectorIds.length > 0
+        ? await fetchRowsForIds(sectorIds, (batch, from, to) => supabase.from("secteurs")
+          .select("id, nom, code, team_id")
+          .in("id", batch).order("id", { ascending: true }).range(from, to))
+        : { data: [], error: null };
+      if (sectorResult.error) return jsonError(500, "Erreur lors de la récupération des secteurs liés");
+      const sectors = sectorResult.data as Record<string, unknown>[];
+      const sectorTeams = new Map(sectors.map((sector) => [String(sector.id), String(sector.team_id ?? "")]));
+      const pointResult = await fetchRowsForIds(allProfileIds, (batch, from, to) => supabase.from("points_vente")
+        .select("id, code, name, created_at, team_id, secteur_id, active, created_by, created_by_role", { count: "exact" })
+        .in("created_by", batch).order("id", { ascending: true }).range(from, to));
+      const linkedPointResult = pointIds.length > 0
+        ? await fetchRowsForIds(pointIds, (batch, from, to) => supabase.from("points_vente")
+          .select("id, code, name, created_at, team_id, secteur_id, active, created_by, created_by_role", { count: "exact" })
+          .in("id", batch).order("id", { ascending: true }).range(from, to))
+        : { data: [], error: null };
+      const sectorPointResult = sectorIds.length > 0
+        ? await fetchRowsForIds(sectorIds, (batch, from, to) => supabase.from("points_vente")
+          .select("id, code, name, created_at, team_id, secteur_id, active, created_by, created_by_role", { count: "exact" })
+          .in("secteur_id", batch).order("id", { ascending: true }).range(from, to))
+        : { data: [], error: null };
+      if (pointResult.error || linkedPointResult.error || sectorPointResult.error) {
+        return jsonError(500, "Erreur lors de la récupération des POS liés aux profils");
+      }
+
+      const visitsByPoint = new Map<string, Record<string, unknown>[]>();
+      for (const visit of visits.data) {
+        const pointId = String(visit.point_vente_id);
+        visitsByPoint.set(pointId, [...(visitsByPoint.get(pointId) || []), visit]);
+      }
+      const directlyRelatedPoints = uniqueById([
+        ...pointResult.data as Record<string, unknown>[],
+        ...linkedPointResult.data as Record<string, unknown>[],
+      ]);
+      const sectorsById = new Map(sectors.map((sector) => [String(sector.id), sector]));
+      const points = directlyRelatedPoints.map((point) => {
+        const creatorProfile = profiles.find((profile) => String(profile.id) === String(point.created_by));
+        const createdAt = typeof point.created_at === "string" ? point.created_at : "";
+        const isOlderThanCreatedByMigration = createdAt !== "" && createdAt < "2026-09-14T12:23:29.000Z";
+        return {
+          ...point,
+          secteur: sectorsById.get(String(point.secteur_id)) ?? null,
+          created_by_profile: creatorProfile ? {
+            id: creatorProfile.id,
+            full_name: creatorProfile.full_name,
+            identifiant: creatorProfile.identifiant ?? creatorProfile.email ?? null,
+            profile_type: creatorProfile.profile_type,
+          } : null,
+          visits: visitsByPoint.get(String(point.id)) || [],
+          decision: "INCERTAIN" as const,
+          origin_assessment: isOlderThanCreatedByMigration
+            ? "INCERTAIN — POS antérieur à l'ajout des colonnes created_by; compatible avec le backfill historique"
+            : "INCERTAIN — created_by seul ne prouve pas la création; aucun journal immuable de création n'est exposé par l'application",
+        };
+      });
+      const assignedSectorPoints = uniqueById(sectorPointResult.data as Record<string, unknown>[])
+        .filter((point) => sectorTeams.get(String(point.secteur_id)) === String(point.team_id));
+      const auditGroups = targets.map((target) => ({
+        target,
+        profiles: profiles.filter((profile) => profile.matched_target === target),
+      }));
+
+      return jsonResponse({
+        read_only: true,
+        targets: auditGroups,
+        profiles,
+        assignments: {
+          commercial_tournees: commercialAssignments.data,
+          team_leader_tournees: supervisorAssignments.data,
+          secteurs: sectors,
+          assigned_sector_points: assignedSectorPoints,
+        },
+        related_data: {
+          visites: visits.data,
+          ventes: sales.data,
+          commandes: orders.data,
+          livraisons: deliveries.data,
+          bons_livraison: bills.data,
+          promesses_achat: promises.data,
+          controles_terrain: controls.data,
+          commercial_agent_livreur: agentAssociations.data,
+          sessions: sessions.data,
+          commande_lignes: orderLines.data,
+          commande_status_history: orderHistory.data,
+          vente_lignes: saleLines.data,
+          bl_lignes: billLines.data,
+        },
+        points,
+        note: "Aucune suppression n'est proposée par cette route. L'origine de created_by reste incertaine sans événement de création immuable.",
+      });
+    }
+
     // --- SECTEURS CRUD ---
     if (path === "/secteurs" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_secteurs", "manage_commerciaux", "manage_superviseurs", "manage_points_vente", "view_carte", "view_dashboard", "view_visites"); if (denied) return denied; }
