@@ -10,7 +10,6 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   permission: Permission;
-  superAdminOnly?: boolean;
 }
 
 const allNavItems: NavItem[] = [
@@ -18,8 +17,7 @@ const allNavItems: NavItem[] = [
   { path: "/admin/carte", label: "Carte", icon: MapIcon, permission: "view_carte" },
   { path: "/admin/secteurs", label: "Tournées", icon: MapPin, permission: "manage_secteurs" },
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
-  { path: "/admin/diagnostic-pos", label: "Diagnostic POS", icon: ClipboardCheck, permission: "manage_points_vente", superAdminOnly: true },
-  { path: "/admin/audit-comptes-test", label: "Audit comptes de test", icon: ClipboardCheck, permission: "manage_points_vente", superAdminOnly: true },
+  { path: "/admin/diagnostic-pos", label: "Diagnostic POS", icon: ClipboardCheck, permission: "manage_points_vente" },
   { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
   { path: "/admin/agents-livreur", label: "Agents livreur", icon: Truck, permission: "manage_agents_livreur" },
   { path: "/admin/commandes", label: "Commandes", icon: ClipboardList, permission: "view_dashboard" },
@@ -66,9 +64,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const navItems = allNavItems.filter((item) =>
-    hasPermission(item.permission) && (!item.superAdminOnly || isSuperAdmin),
-  );
+  const navItems = allNavItems.filter((item) => hasPermission(item.permission));
 
   const handleLogout = async () => {
     await logout();

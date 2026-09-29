@@ -244,25 +244,6 @@ export interface CommercialPointsVenteDiagnostic {
   pagination: PosListPagination;
 }
 
-export interface TestAccountDataAudit {
-  read_only: true;
-  targets: { target: string; profiles: Record<string, unknown>[] }[];
-  profiles: Record<string, unknown>[];
-  assignments: {
-    commercial_tournees: Record<string, unknown>[];
-    team_leader_tournees: Record<string, unknown>[];
-    secteurs: Record<string, unknown>[];
-    assigned_sector_points: Record<string, unknown>[];
-  };
-  related_data: Record<string, Record<string, unknown>[]>;
-  points: (Record<string, unknown> & {
-    decision: "INCERTAIN";
-    origin_assessment: string;
-    visits: Record<string, unknown>[];
-  })[];
-  note: string;
-}
-
 export type VenteStatus =
   | "confirmed"
   | "out_of_zone"

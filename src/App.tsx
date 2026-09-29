@@ -18,7 +18,6 @@ import { AdminAgentsLivreur } from "@/pages/admin/AdminAgentsLivreur";
 import { AdminCommandes } from "@/pages/admin/AdminCommandes";
 import { AdminTeamStats } from "@/pages/admin/AdminTeamStats";
 import { AdminPosDiagnostics } from "@/pages/admin/AdminPosDiagnostics";
-import { AdminTestAccountAudit } from "@/pages/admin/AdminTestAccountAudit";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
@@ -66,13 +65,12 @@ function NoAccessPage() {
   );
 }
 
-function ProtectedRoute({ children, allow, permission, superAdminOnly = false }: { children: React.ReactNode; allow: UserType; permission?: Permission; superAdminOnly?: boolean }) {
-  const { token, userType, mustChangePassword, loading, hasPermission, isSuperAdmin } = useAuth();
+function ProtectedRoute({ children, allow, permission }: { children: React.ReactNode; allow: UserType; permission?: Permission }) {
+  const { token, userType, mustChangePassword, loading, hasPermission } = useAuth();
   if (loading) return <LoadingScreen />;
   if (!token) return <Navigate to="/" replace />;
   if (mustChangePassword) return <ChangePasswordPage />;
   if (userType !== allow) return <Navigate to={userType === "admin" ? "/admin" : fieldHome[userType!] || "/"} replace />;
-  if (superAdminOnly && !isSuperAdmin) return <NoAccessPage />;
   if (permission && !hasPermission(permission)) return <NoAccessPage />;
   return <>{children}</>;
 }
@@ -111,8 +109,7 @@ function AppRoutes() {
       <Route path="/admin/secteurs" element={<ProtectedRoute allow="admin" permission="manage_secteurs"><AdminLayout><AdminSecteurs /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/bons-livraison" element={<ProtectedRoute allow="admin" permission="manage_bons_livraison"><AdminLayout><AdminBonsLivraison /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin" permission="manage_commerciaux"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/diagnostic-pos" element={<ProtectedRoute allow="admin" superAdminOnly><AdminLayout><AdminPosDiagnostics /></AdminLayout></ProtectedRoute>} />
-      <Route path="/admin/audit-comptes-test" element={<ProtectedRoute allow="admin" superAdminOnly><AdminLayout><AdminTestAccountAudit /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/diagnostic-pos" element={<ProtectedRoute allow="admin" permission="manage_points_vente"><AdminLayout><AdminPosDiagnostics /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin" permission="manage_superviseurs"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/admins" element={<ProtectedRoute allow="admin" permission="manage_admins"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/produits" element={<ProtectedRoute allow="admin" permission="manage_produits"><AdminLayout><AdminProduits /></AdminLayout></ProtectedRoute>} />
