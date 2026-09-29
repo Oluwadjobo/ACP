@@ -940,6 +940,9 @@ async function handleRoute(req: Request): Promise<Response> {
   if (pendingPasswordUser?.must_change_password && path !== "/change-password") {
     return jsonError(403, "Vous devez changer votre mot de passe avant de continuer");
   }
+  if (path.startsWith("/data-cleanup/") && session.user_type !== "admin") {
+    return jsonError(403, "Réservé au super administrateur");
+  }
 
   const perms = (session.permissions as Record<string, boolean>) || {};
   const teamId = session.team_id;
@@ -988,6 +991,486 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonError(403, "Vous n'avez pas l'autorisation d'effectuer cette action");
       }
       return null;
+    }
+
+    if (path.startsWith("/data-cleanup/") && adminRole !== "super_admin") {
+      return jsonError(403, "Réservé au super administrateur");
+    }
+
+    if (path === "/data-cleanup/agents" && method === "GET") {
+      const [commercialResult, supervisorResult, courierResult] = await Promise.all([
+        fetchAllRows((from, to) => supabase.from("commerciaux")
+          .select("id, identifiant, full_name, active, team_id, superviseur_id, created_at", { count: "exact" })
+          .order("full_name", { ascending: true }).range(from, to)),
+        fetchAllRows((from, to) => supabase.from("superviseurs")
+          .select("id, identifiant, full_name, active, team_id, secteur_id, created_at", { count: "exact" })
+          .order("full_name", { ascending: true }).range(from, to)),
+        fetchAllRows((from, to) => supabase.from("agents_livreur")
+          .select("id, identifiant, full_name, active, team_id, created_at", { count: "exact" })
+          .order("full_name", { ascending: true }).range(from, to)),
+      ]);
+      const failed = [commercialResult, supervisorResult, courierResult].find((result) => result.error);
+      if (failed?.error) return jsonError(500, "Erreur lors de la récupération des agents");
+      const agents = [
+        ...commercialResult.data.map((agent: Record<string, unknown>) => ({ ...agent, agent_type: "commercial" })),
+        ...supervisorResult.data.map((agent: Record<string, unknown>) => ({ ...agent, agent_type: "superviseur" })),
+        ...courierResult.data.map((agent: Record<string, unknown>) => ({ ...agent, agent_type: "agent_livreur" })),
+      ];
+      return jsonResponse(agents);
+    }
+
+    if (path === "/data-cleanup/audit" && method === "GET") {
+      const { data, error } = await supabase.from("admin_data_cleanup_audit")
+        .select("id, actor_admin_id, actor_name, target_type, target_id, target_name, deleted_records, created_at")
+        .order("created_at", { ascending: false }).limit(100);
+      if (error) return jsonError(500, "Erreur lors de la lecture du journal de nettoyage");
+      return jsonResponse(data || []);
+    }
+
+    if (path === "/data-cleanup/preview" && method === "GET") {
+      const targetId = url.searchParams.get("agent_id") || "";
+      const targetType = url.searchParams.get("agent_type") || "";
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetId) ||
+        !["commercial", "superviseur", "agent_livreur"].includes(targetType)) {
+        return jsonError(400, "Agent ou rôle invalide");
+      }
+
+      const profileTable = targetType === "commercial" ? "commerciaux" : targetType === "superviseur" ? "superviseurs" : "agents_livreur";
+      const profileResult = await supabase.from(profileTable)
+        .select(targetType === "superviseur"
+          ? "id, identifiant, full_name, active, team_id, secteur_id, created_at"
+          : "id, identifiant, full_name, active, team_id, created_at")
+        .eq("id", targetId).maybeSingle();
+      if (profileResult.error) return jsonError(500, "Erreur lors de la lecture du profil");
+      if (!profileResult.data) return jsonError(404, "Agent introuvable");
+      const profile = profileResult.data as Record<string, unknown>;
+      const actorColumn = targetType === "commercial" ? "commercial_id" : "superviseur_id";
+      const visitResult = targetType === "agent_livreur"
+        ? { data: [], error: null }
+        : await fetchAllRows((from, to) => supabase.from("visites")
+          .select("id, commercial_id, superviseur_id, user_role, point_vente_id, visited_at, status, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+          .eq(actorColumn, targetId).order("visited_at", { ascending: false }).range(from, to));
+      if (visitResult.error) return jsonError(500, "Erreur lors de la lecture des visites");
+      const visitIds = visitResult.data.map((row: Record<string, unknown>) => String(row.id));
+      const visitFilterIds = visitIds.length ? visitIds : ["00000000-0000-0000-0000-000000000000"];
+
+      const [pointResult, salesByActorResult, salesByVisitResult, noteResult, promiseResult,
+        controlResult, deliveryResult, orderResult, commercialTourResult, supervisorTourResult, linkResult] = await Promise.all([
+        fetchAllRows((from, to) => supabase.from("points_vente")
+          .select("id, code, name, address, city, team_id, secteur_id, created_by, created_by_role, active, created_at, secteur:secteurs(nom, code)", { count: "exact" })
+          .eq("created_by", targetId).eq("created_by_role", targetType)
+          .order("created_at", { ascending: false }).range(from, to)),
+        targetType === "agent_livreur"
+          ? Promise.resolve({ data: [], error: null })
+          : fetchAllRows((from, to) => supabase.from("ventes")
+            .select("id, visite_id, commercial_id, superviseur_id, point_vente_id, montant_total, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .eq(actorColumn, targetId).order("created_at", { ascending: false }).range(from, to)),
+        visitIds.length
+          ? fetchRowsForIds(visitFilterIds, (batch, from, to) => supabase.from("ventes")
+            .select("id, visite_id, commercial_id, superviseur_id, point_vente_id, montant_total, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .in("visite_id", batch).order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        targetType === "agent_livreur"
+          ? Promise.resolve({ data: [], error: null })
+          : fetchAllRows((from, to) => supabase.from("bons_livraison")
+            .select("id, numero, vente_id, commercial_id, superviseur_id, point_vente_id, statut, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .or(`${actorColumn}.eq.${targetId}`).order("created_at", { ascending: false }).range(from, to)),
+        targetType === "superviseur"
+          ? fetchAllRows((from, to) => supabase.from("promesses_achat")
+            .select("id, visite_id, superviseur_id, point_vente_id, produits, quantite, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .eq("superviseur_id", targetId).order("created_at", { ascending: false }).range(from, to))
+          : visitIds.length
+            ? fetchRowsForIds(visitFilterIds, (batch, from, to) => supabase.from("promesses_achat")
+              .select("id, visite_id, superviseur_id, point_vente_id, produits, quantite, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+              .in("visite_id", batch).order("created_at", { ascending: false }).range(from, to))
+            : Promise.resolve({ data: [], error: null }),
+        targetType === "superviseur"
+          ? fetchAllRows((from, to) => supabase.from("controles_terrain")
+            .select("id, superviseur_id, visite_id, point_vente_id, secteur_id, notation, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .eq("superviseur_id", targetId).order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        fetchAllRows((from, to) => {
+          let query = supabase.from("livraisons")
+            .select("id, commande_id, agent_livreur_id, commercial_id, point_vente_id, statut_final, date_livraison, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .order("created_at", { ascending: false }).range(from, to);
+          if (targetType === "agent_livreur") query = query.eq("agent_livreur_id", targetId);
+          else if (targetType === "commercial") query = query.eq("commercial_id", targetId);
+          else query = query.eq("agent_livreur_id", "00000000-0000-0000-0000-000000000000");
+          return query;
+        }),
+        targetType === "commercial" || targetType === "agent_livreur"
+          ? fetchAllRows((from, to) => supabase.from("commandes")
+            .select("id, code, point_vente_id, commercial_id, agent_livreur_id, statut, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+            .eq(targetType === "commercial" ? "commercial_id" : "agent_livreur_id", targetId)
+            .order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        targetType === "commercial"
+          ? fetchAllRows((from, to) => supabase.from("commercial_tournees")
+            .select("id, commercial_id, secteur_id, created_at, secteur:secteurs(nom, code)", { count: "exact" })
+            .eq("commercial_id", targetId).order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        targetType === "superviseur"
+          ? fetchAllRows((from, to) => supabase.from("team_leader_tournees")
+            .select("id, superviseur_id, secteur_id, created_at, secteur:secteurs(nom, code)", { count: "exact" })
+            .eq("superviseur_id", targetId).order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        targetType === "commercial" || targetType === "agent_livreur"
+          ? fetchAllRows((from, to) => supabase.from("commercial_agent_livreur")
+            .select("id, commercial_id, agent_livreur_id, created_at")
+            .eq(targetType === "commercial" ? "commercial_id" : "agent_livreur_id", targetId)
+            .order("created_at", { ascending: false }).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      const allResults = [pointResult, salesByActorResult, salesByVisitResult, noteResult, promiseResult,
+        controlResult, deliveryResult, orderResult, commercialTourResult, supervisorTourResult, linkResult];
+      const failedResult = allResults.find((result) => result.error);
+      if (failedResult?.error) return jsonError(500, "Erreur lors de la lecture des données métier");
+      const directSaleIds = new Set(salesByActorResult.data.map((row: Record<string, unknown>) => String(row.id)));
+      const sales = uniqueById([...salesByActorResult.data, ...salesByVisitResult.data]
+        .map((row: Record<string, unknown>) => ({
+          ...row,
+          cleanup_source: directSaleIds.has(String(row.id)) ? "Lien direct par commercial/superviseur" : "Liée à une visite de l’agent",
+        })) as Record<string, unknown>[]);
+      const saleIds = sales.map((row) => String(row.id));
+      const saleFilterIds = saleIds.length ? saleIds : ["00000000-0000-0000-0000-000000000000"];
+      const noteBySaleResult = saleIds.length
+        ? await fetchRowsForIds(saleFilterIds, (batch, from, to) => supabase.from("bons_livraison")
+          .select("id, numero, vente_id, commercial_id, superviseur_id, point_vente_id, statut, created_at, point_vente:points_vente(name, code)", { count: "exact" })
+          .in("vente_id", batch).order("created_at", { ascending: false }).range(from, to))
+        : { data: [], error: null };
+      if (noteBySaleResult.error) return jsonError(500, "Erreur lors de la lecture des bons de livraison");
+      const directNoteIds = new Set(noteResult.data.map((row: Record<string, unknown>) => String(row.id)));
+      const notes = uniqueById([...noteResult.data, ...noteBySaleResult.data]
+        .map((row: Record<string, unknown>) => ({
+          ...row,
+          cleanup_source: directNoteIds.has(String(row.id)) ? "Lien direct par commercial/superviseur" : "Lié à une vente de l’agent",
+        })) as Record<string, unknown>[]);
+
+      const pointIds = pointResult.data.map((row: Record<string, unknown>) => String(row.id));
+      const sectors = [...new Set(pointResult.data.map((row: Record<string, unknown>) => String(row.secteur_id || "")).filter(Boolean))];
+      const pointBatches = pointIds.length ? pointIds : ["00000000-0000-0000-0000-000000000000"];
+      const sectorBatches = sectors.length ? sectors : ["00000000-0000-0000-0000-000000000000"];
+      const [allVisitsResult, allSalesResult, allPromisesResult, allControlsResult, allNotesResult,
+        allDeliveriesResult, allOrdersResult, otherCommercialAssignments, otherSupervisorAssignments] = pointIds.length
+        ? await Promise.all([
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("visites")
+            .select("id, point_vente_id, commercial_id, superviseur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("ventes")
+            .select("id, point_vente_id, commercial_id, superviseur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("promesses_achat")
+            .select("id, point_vente_id, superviseur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("controles_terrain")
+            .select("id, point_vente_id, superviseur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("bons_livraison")
+            .select("id, point_vente_id, commercial_id, superviseur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("livraisons")
+            .select("id, point_vente_id, agent_livreur_id, commercial_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(pointBatches, (batch, from, to) => supabase.from("commandes")
+            .select("id, point_vente_id, commercial_id, agent_livreur_id").in("point_vente_id", batch).range(from, to)),
+          fetchRowsForIds(sectorBatches, (batch, from, to) => supabase.from("commercial_tournees")
+            .select("id, secteur_id, commercial_id").in("secteur_id", batch).neq("commercial_id", targetId).range(from, to)),
+          fetchRowsForIds(sectorBatches, (batch, from, to) => supabase.from("team_leader_tournees")
+            .select("id, secteur_id, superviseur_id").in("secteur_id", batch).neq("superviseur_id", targetId).range(from, to)),
+        ])
+        : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null },
+          { data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
+      const pointUsageResults = [allVisitsResult, allSalesResult, allPromisesResult, allControlsResult, allNotesResult,
+        allDeliveriesResult, allOrdersResult, otherCommercialAssignments, otherSupervisorAssignments];
+      if (pointUsageResults.some((result) => result.error)) return jsonError(500, "Erreur lors de la vérification de l’usage des POS");
+
+      const visitRows = allVisitsResult.data as Record<string, unknown>[];
+      const visitCommercialIds = [...new Set(visitRows.map((row) => String(row.commercial_id || "")).filter(Boolean))];
+      const visitSupervisorIds = [...new Set(visitRows.map((row) => String(row.superviseur_id || "")).filter(Boolean))];
+      const [visitCommercials, visitSupervisors] = await Promise.all([
+        visitCommercialIds.length
+          ? fetchRowsForIds(visitCommercialIds, (batch, from, to) => supabase.from("commerciaux")
+            .select("id, full_name").in("id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        visitSupervisorIds.length
+          ? fetchRowsForIds(visitSupervisorIds, (batch, from, to) => supabase.from("superviseurs")
+            .select("id, full_name").in("id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (visitCommercials.error || visitSupervisors.error) return jsonError(500, "Erreur lors de la lecture des utilisateurs des visites POS");
+      const visitUserNames = new Map<string, string>();
+      for (const user of visitCommercials.data as Record<string, unknown>[]) visitUserNames.set(`commercial:${String(user.id)}`, String(user.full_name));
+      for (const user of visitSupervisors.data as Record<string, unknown>[]) visitUserNames.set(`superviseur:${String(user.id)}`, String(user.full_name));
+      const relatedRowsByPoint = [
+        ["visites", allVisitsResult.data],
+        ["ventes", allSalesResult.data],
+        ["promesses", allPromisesResult.data],
+        ["controles", allControlsResult.data],
+        ["bons_livraison", allNotesResult.data],
+        ["livraisons", allDeliveriesResult.data],
+        ["commandes", allOrdersResult.data],
+      ] as [string, Record<string, unknown>[]][];
+      const pointUsage = new Map<string, Record<string, number>>();
+      for (const [category, rows] of relatedRowsByPoint) {
+        for (const row of rows) {
+          const pointId = String(row.point_vente_id);
+          const counts = pointUsage.get(pointId) || {};
+          counts[category] = (counts[category] || 0) + 1;
+          pointUsage.set(pointId, counts);
+        }
+      }
+
+      const linkedCommercialIds = targetType === "agent_livreur"
+        ? [...new Set((linkResult.data as Record<string, unknown>[]).map((row) => String(row.commercial_id)))]
+        : [];
+      const linkedCommercialAssignments = linkedCommercialIds.length
+        ? await fetchRowsForIds(linkedCommercialIds, (batch, from, to) => supabase.from("commercial_tournees")
+          .select("secteur_id").in("commercial_id", batch).range(from, to))
+        : { data: [], error: null };
+      if (linkedCommercialAssignments.error) return jsonError(500, "Erreur lors de la récupération des tournées associées");
+      const perimeterSectorIds = [...new Set([
+        ...commercialTourResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)),
+        ...supervisorTourResult.data.map((row: Record<string, unknown>) => String(row.secteur_id)),
+        ...(typeof profile.secteur_id === "string" ? [profile.secteur_id] : []),
+        ...linkedCommercialAssignments.data.map((row: Record<string, unknown>) => String(row.secteur_id)),
+      ])];
+      const perimeterPointsResult = perimeterSectorIds.length
+        ? await fetchRowsForIds(perimeterSectorIds, (batch, from, to) => supabase.from("points_vente")
+          .select("id, code, name, address, team_id, secteur_id, created_by, created_by_role, active, created_at, secteur:secteurs(nom, code)", { count: "exact" })
+          .in("secteur_id", batch).order("name", { ascending: true }).range(from, to))
+        : { data: [], error: null };
+      if (perimeterPointsResult.error) return jsonError(500, "Erreur lors de la lecture du périmètre de tournées");
+
+      const orderIds = orderResult.data.map((row: Record<string, unknown>) => String(row.id));
+      const noteIds = notes.map((row) => String(row.id));
+      const [saleLinesResult, noteLinesResult, orderLinesResult, orderHistoryResult] = await Promise.all([
+        saleIds.length
+          ? fetchRowsForIds(saleFilterIds, (batch, from, to) => supabase.from("vente_lignes")
+            .select("id, vente_id, produit_nom, quantite").in("vente_id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        noteIds.length
+          ? fetchRowsForIds(noteIds, (batch, from, to) => supabase.from("bl_lignes")
+            .select("id, bl_id, produit_nom, quantite, unite").in("bl_id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        orderIds.length
+          ? fetchRowsForIds(orderIds, (batch, from, to) => supabase.from("commande_lignes")
+            .select("id, commande_id, produit_nom, quantite, unite").in("commande_id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+        orderIds.length
+          ? fetchRowsForIds(orderIds, (batch, from, to) => supabase.from("commande_status_history")
+            .select("id, commande_id, ancien_statut, nouveau_statut, modifie_par, user_role, created_at")
+            .in("commande_id", batch).range(from, to))
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if ([saleLinesResult, noteLinesResult, orderLinesResult, orderHistoryResult].some((result) => result.error)) {
+        return jsonError(500, "Erreur lors de la lecture des dépendances de données");
+      }
+
+      const currentSector = new Map<string, string[]>();
+      for (const assignment of [...otherCommercialAssignments.data, ...otherSupervisorAssignments.data] as Record<string, unknown>[]) {
+        const sectorId = String(assignment.secteur_id);
+        currentSector.set(sectorId, [...(currentSector.get(sectorId) || []), String(assignment.commercial_id || assignment.superviseur_id)]);
+      }
+      const referencesByPoint = new Map<string, string[]>();
+      const addReference = (rows: Record<string, unknown>[], label: string, actorFields: string[]) => {
+        for (const row of rows) {
+          const actors = actorFields.map((field) => row[field]).filter(Boolean).map(String);
+          if (actors.length === 0 || actors.some((actor) => actor !== targetId)) {
+            const pointId = String(row.point_vente_id);
+            referencesByPoint.set(pointId, [...(referencesByPoint.get(pointId) || []), label]);
+          }
+        }
+      };
+      addReference(allVisitsResult.data as Record<string, unknown>[], "visite d’un autre agent", ["commercial_id", "superviseur_id"]);
+      addReference(allSalesResult.data as Record<string, unknown>[], "vente d’un autre agent", ["commercial_id", "superviseur_id"]);
+      addReference(allPromisesResult.data as Record<string, unknown>[], "promesse d’un autre superviseur", ["superviseur_id"]);
+      addReference(allControlsResult.data as Record<string, unknown>[], "contrôle d’un autre superviseur", ["superviseur_id"]);
+      addReference(allNotesResult.data as Record<string, unknown>[], "bon de livraison d’un autre agent", ["commercial_id", "superviseur_id"]);
+      addReference(allDeliveriesResult.data as Record<string, unknown>[], "livraison d’un autre agent", ["agent_livreur_id", "commercial_id"]);
+      addReference(allOrdersResult.data as Record<string, unknown>[], "commande liée à un autre agent", ["commercial_id", "agent_livreur_id"]);
+
+      const categories: Record<string, { title: string; records: Record<string, unknown>[] }> = {
+        points_vente: { title: "Points de vente", records: [] },
+        points_vente_perimetre: { title: "POS du périmètre dynamique (information seulement)", records: [] },
+        vente_lignes: { title: "Lignes de vente (dépendances)", records: [] },
+        bl_lignes: { title: "Lignes des bons de livraison (dépendances)", records: [] },
+        commande_lignes: { title: "Lignes de commande (dépendances)", records: [] },
+        commande_status_history: { title: "Historique des commandes (dépendances)", records: [] },
+        visites: { title: "Visites", records: [] },
+        ventes: { title: "Ventes", records: [] },
+        bons_livraison: { title: "Bons de livraison", records: [] },
+        promesses_achat: { title: "Promesses d’achat", records: [] },
+        controles_terrain: { title: "Contrôles terrain", records: [] },
+        livraisons: { title: "Livraisons", records: [] },
+        commandes: { title: "Commandes", records: [] },
+        commercial_tournees: { title: "Affectations de tournées commerciales", records: [] },
+        team_leader_tournees: { title: "Affectations de tournées superviseur", records: [] },
+        commercial_agent_livreur: { title: "Associations commercial-livreur", records: [] },
+      };
+      const displayPoint = (row: Record<string, unknown>) => {
+        const point = row.point_vente as Record<string, unknown> | null;
+        return point ? `${String(point.code || "")} — ${String(point.name || "")}` : "POS non disponible";
+      };
+      const addRecords = (key: string, rows: Record<string, unknown>[], label: (row: Record<string, unknown>) => string,
+        detail: (row: Record<string, unknown>) => string,
+        selectable: boolean | ((row: Record<string, unknown>) => boolean) = true) => {
+        categories[key].records = rows.map((row) => ({
+          id: row.id,
+          label: label(row),
+          detail: detail(row),
+          created_at: row.created_at || row.visited_at || row.date_livraison || null,
+          selectable: typeof selectable === "function" ? selectable(row) : selectable,
+          protection_reason: (typeof selectable === "function" ? selectable(row) : selectable)
+            ? null : "Donnée contextuelle ou partagée : sa suppression peut affecter un autre agent",
+          row,
+        }));
+      };
+      const points = pointResult.data as Record<string, unknown>[];
+      categories.points_vente.records = points.map((row) => {
+        const sector = row.secteur as Record<string, unknown> | null;
+        const reasons = [
+          ...(referencesByPoint.get(String(row.id)) || []),
+          ...(currentSector.get(String(row.secteur_id || "")) || []).length ? ["tournée actuellement affectée à un autre agent"] : [],
+        ];
+        return {
+          id: row.id,
+          label: `${String(row.code)} — ${String(row.name)}`,
+          detail: `${String(sector?.nom || "Sans secteur")} · Créateur enregistré (${String(row.created_by_role || "rôle inconnu")}) · ${String(row.created_at || "")}`,
+          created_at: row.created_at,
+          selectable: reasons.length === 0,
+          protection_reason: reasons.length ? [...new Set(reasons)].join(", ") : null,
+          provenance_warning: "created_by peut provenir du backfill historique ; ce champ seul ne prouve pas une création directe.",
+          row: {
+            id: row.id, code: row.code, name: row.name, team_id: row.team_id, secteur_id: row.secteur_id,
+            created_by: row.created_by, created_by_role: row.created_by_role, active: row.active, created_at: row.created_at,
+            qr_configured: true,
+            usage: pointUsage.get(String(row.id)) || {},
+            visit_users: [...new Set((allVisitsResult.data as Record<string, unknown>[])
+              .filter((visit) => String(visit.point_vente_id) === String(row.id))
+              .flatMap((visit) => [
+                ...(visit.commercial_id ? [`commercial:${String(visit.commercial_id)}`] : []),
+                ...(visit.superviseur_id ? [`superviseur:${String(visit.superviseur_id)}`] : []),
+              ]))]
+              .map((key) => visitUserNames.get(key) || `${key.split(":")[0]} ${key.split(":")[1]}`),
+          },
+        };
+      });
+      const createdPointIds = new Set(points.map((row) => String(row.id)));
+      categories.points_vente_perimetre.records = uniqueById(perimeterPointsResult.data as Record<string, unknown>[])
+        .filter((row) => !createdPointIds.has(String(row.id)))
+        .map((row) => ({
+          id: String(row.id),
+          label: `${String(row.code)} — ${String(row.name)}`,
+          detail: `${String((row.secteur as Record<string, unknown> | null)?.nom || "Sans secteur")} · Affectation dynamique · ${String(row.created_at || "")}`,
+          created_at: row.created_at,
+          selectable: false,
+          protection_reason: "POS du périmètre dynamique : le secteur/la tournée n’est pas la propriété de l’agent et n’est pas supprimable ici.",
+          provenance_warning: "Présence dans un secteur affecté, sans preuve de création ou d’exclusivité.",
+          row: {
+            id: row.id, code: row.code, name: row.name, team_id: row.team_id, secteur_id: row.secteur_id,
+            created_by: row.created_by, created_by_role: row.created_by_role, active: row.active, created_at: row.created_at,
+            qr_configured: true,
+            usage: pointUsage.get(String(row.id)) || {},
+          },
+        }));
+      addRecords("visites", visitResult.data as Record<string, unknown>[], (row) => `Visite #${String(row.id).slice(0, 8)}`,
+        (row) => `${displayPoint(row)} · ${String(row.visited_at || "")} · ${String(row.status || "")}`,
+        (row) => (!row.commercial_id || (targetType === "commercial" && row.commercial_id === targetId)) &&
+          (!row.superviseur_id || (targetType === "superviseur" && row.superviseur_id === targetId)));
+      addRecords("ventes", sales, (row) => `Vente #${String(row.id).slice(0, 8)}`,
+        (row) => `${displayPoint(row)} · ${String(row.montant_total || 0)} · ${String(row.cleanup_source || "")} · ${String(row.created_at || "")}`,
+        (row) => (!row.commercial_id || (targetType === "commercial" && row.commercial_id === targetId)) &&
+          (!row.superviseur_id || (targetType === "superviseur" && row.superviseur_id === targetId)));
+      addRecords("bons_livraison", notes as Record<string, unknown>[], (row) => String(row.numero || `BL #${String(row.id).slice(0, 8)}`),
+        (row) => `${displayPoint(row)} · ${String(row.statut || "")} · ${String(row.cleanup_source || "")} · ${String(row.created_at || "")}`,
+        (row) => (!row.commercial_id || (targetType === "commercial" && row.commercial_id === targetId)) &&
+          (!row.superviseur_id || (targetType === "superviseur" && row.superviseur_id === targetId)));
+      addRecords("promesses_achat", promiseResult.data as Record<string, unknown>[], (row) => `Promesse #${String(row.id).slice(0, 8)}`,
+        (row) => `${displayPoint(row)} · ${String(row.produits || "")} · ${String(row.created_at || "")}`,
+        targetType === "superviseur");
+      addRecords("controles_terrain", controlResult.data as Record<string, unknown>[], (row) => `Contrôle #${String(row.id).slice(0, 8)}`,
+        (row) => `${displayPoint(row)} · ${String(row.notation || "")} · ${String(row.created_at || "")}`);
+      addRecords("livraisons", deliveryResult.data as Record<string, unknown>[], (row) => `Livraison #${String(row.id).slice(0, 8)}`,
+        (row) => `${displayPoint(row)} · ${String(row.statut_final || "")} · ${String(row.date_livraison || "")}`,
+        (row) => targetType === "agent_livreur"
+          ? row.agent_livreur_id === targetId && (!row.commercial_id || row.commercial_id === targetId)
+          : targetType === "commercial" && row.commercial_id === targetId && !row.agent_livreur_id);
+      addRecords("commandes", orderResult.data as Record<string, unknown>[],
+        (row) => `Commande ${String(row.code || row.id)}`, (row) => `${displayPoint(row)} · ${String(row.statut || "")}`,
+        (row) => targetType === "commercial" && row.commercial_id === targetId && !row.agent_livreur_id);
+      addRecords("commercial_tournees", commercialTourResult.data as Record<string, unknown>[],
+        (row) => `Affectation #${String(row.id).slice(0, 8)}`,
+        (row) => `${String((row.secteur as Record<string, unknown> | null)?.nom || "Tournée inconnue")} · ${String(row.created_at || "")}`);
+      addRecords("team_leader_tournees", supervisorTourResult.data as Record<string, unknown>[],
+        (row) => `Affectation #${String(row.id).slice(0, 8)}`,
+        (row) => `${String((row.secteur as Record<string, unknown> | null)?.nom || "Tournée inconnue")} · ${String(row.created_at || "")}`);
+      addRecords("commercial_agent_livreur", linkResult.data as Record<string, unknown>[],
+        (row) => `Association #${String(row.id).slice(0, 8)}`, (row) => String(row.created_at || ""));
+      for (const key of ["commercial_tournees", "team_leader_tournees", "commercial_agent_livreur"]) {
+        for (const record of categories[key].records) {
+          record.provenance_warning = "Affectation directement liée à l’agent, mais aucune donnée ne prouve qu’elle a été créée pour un test. Vérifiez-la avant sélection.";
+        }
+      }
+      const addCascadeRecords = (key: string, rows: Record<string, unknown>[], parentKey: string,
+        label: (row: Record<string, unknown>) => string, detail: (row: Record<string, unknown>) => string) => {
+        categories[key].records = rows.map((row) => ({
+          id: row.id,
+          label: label(row),
+          detail: detail(row),
+          created_at: row.created_at || null,
+          selectable: false,
+          protection_reason: "Dépendance : sera supprimée uniquement si son élément parent est sélectionné.",
+          cascade_parent_category: parentKey,
+          row,
+        }));
+      };
+      addCascadeRecords("vente_lignes", saleLinesResult.data as Record<string, unknown>[], "ventes",
+        (row) => `${String(row.produit_nom || "Produit")} × ${String(row.quantite || 0)}`,
+        (row) => `Ligne #${String(row.id).slice(0, 8)}`);
+      addCascadeRecords("bl_lignes", noteLinesResult.data as Record<string, unknown>[], "bons_livraison",
+        (row) => `${String(row.produit_nom || "Produit")} × ${String(row.quantite || 0)}`,
+        (row) => `Ligne #${String(row.id).slice(0, 8)}`);
+      addCascadeRecords("commande_lignes", orderLinesResult.data as Record<string, unknown>[], "commandes",
+        (row) => `${String(row.produit_nom || "Produit")} × ${String(row.quantite || 0)}`,
+        (row) => `Ligne #${String(row.id).slice(0, 8)}`);
+      addCascadeRecords("commande_status_history", orderHistoryResult.data as Record<string, unknown>[], "commandes",
+        (row) => `${String(row.ancien_statut || "—")} → ${String(row.nouveau_statut || "")}`,
+        (row) => `${String(row.modifie_par || "Utilisateur inconnu")} · ${String(row.created_at || "")}`);
+
+      return jsonResponse({
+        agent: {
+          id: profile.id, identifiant: profile.identifiant, full_name: profile.full_name,
+          active: profile.active, team_id: profile.team_id, agent_type: targetType, created_at: profile.created_at,
+        },
+        categories,
+      });
+    }
+
+    if (path === "/data-cleanup/delete" && method === "POST") {
+      const body = await req.json();
+      const { agent_id: targetId, agent_type: targetType, selected, confirmation, second_confirmation: secondConfirmation } = body;
+      if (typeof targetId !== "string" || typeof targetType !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetId) ||
+        !["commercial", "superviseur", "agent_livreur"].includes(targetType) ||
+        !selected || typeof selected !== "object" || Array.isArray(selected) || confirmation !== "SUPPRIMER") {
+        return jsonError(400, "Confirmation ou sélection invalide");
+      }
+      const selectedCount = Object.values(selected as Record<string, unknown>)
+        .reduce((total, ids) => total + (Array.isArray(ids) ? ids.length : 0), 0);
+      if (selectedCount === 0) return jsonError(400, "Sélectionnez au moins un élément");
+      if (selectedCount >= 10 && secondConfirmation !== "SUPPRIMER DÉFINITIVEMENT") {
+        return jsonError(400, "La seconde confirmation est requise pour dix éléments ou plus");
+      }
+      const profileTable = targetType === "commercial" ? "commerciaux" : targetType === "superviseur" ? "superviseurs" : "agents_livreur";
+      const { data: target, error: targetError } = await supabase.from(profileTable)
+        .select("id, full_name").eq("id", targetId).maybeSingle();
+      if (targetError) return jsonError(500, "Erreur lors de la validation de l’agent");
+      if (!target) return jsonError(404, "Agent introuvable");
+      const { data, error } = await supabase.rpc("admin_cleanup_delete", {
+        p_actor_id: session.user_id,
+        p_actor_name: session.full_name,
+        p_target_type: targetType,
+        p_target_id: targetId,
+        p_target_name: target.full_name,
+        p_selected: selected,
+        p_second_confirmation: secondConfirmation || null,
+      });
+      if (error) return jsonError(409, error.message || "Suppression refusée par les contrôles de sécurité");
+      return jsonResponse(data);
     }
 
     if (path === "/diagnostics/commercial-points-vente" && method === "POST") {

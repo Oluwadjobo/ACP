@@ -490,6 +490,28 @@ export const api = {
   listHistoriqueLivraisons: () =>
     apiRequest<{ id: string; commande_id: string; statut_final: string; date_livraison: string; commentaire: string | null; created_at: string; commande?: { code: string }; point_vente?: { name: string; city: string; address: string }; commercial?: { full_name: string } }[]>("/historique-livraisons", { method: "GET" }),
 
+  // Admin - Super Admin data cleanup
+  listDataCleanupAgents: () =>
+    apiRequest<import("@/types").CleanupAgent[]>("/data-cleanup/agents", { method: "GET" }),
+
+  getDataCleanupPreview: (agentType: import("@/types").CleanupAgentType, agentId: string) =>
+    apiRequest<import("@/types").CleanupPreview>(`/data-cleanup/preview?agent_type=${encodeURIComponent(agentType)}&agent_id=${encodeURIComponent(agentId)}`, { method: "GET" }),
+
+  deleteDataCleanupSelection: (body: {
+    agent_type: import("@/types").CleanupAgentType;
+    agent_id: string;
+    selected: Record<string, string[]>;
+    confirmation: string;
+    second_confirmation?: string;
+  }) =>
+    apiRequest<{ audit_id: string; deleted_records: Record<string, string[]> }>("/data-cleanup/delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listDataCleanupAudit: () =>
+    apiRequest<import("@/types").CleanupAuditEntry[]>("/data-cleanup/audit", { method: "GET" }),
+
   // Field - Mes tournées
   mesTournees: () => apiRequest<import("@/types").Tournee[]>("/mes-tournees", { method: "GET" }),
 

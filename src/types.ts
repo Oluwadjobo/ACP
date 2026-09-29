@@ -228,6 +228,51 @@ export interface PosListPagination {
   truncated: boolean;
 }
 
+export type CleanupAgentType = "commercial" | "superviseur" | "agent_livreur";
+
+export interface CleanupAgent {
+  id: string;
+  identifiant: string;
+  full_name: string;
+  active: boolean;
+  team_id: string | null;
+  agent_type: CleanupAgentType;
+  created_at: string;
+}
+
+export interface CleanupRecord {
+  id: string;
+  label: string;
+  detail: string;
+  created_at: string | null;
+  selectable: boolean;
+  protection_reason: string | null;
+  provenance_warning?: string;
+  cascade_parent_category?: string;
+  row: Record<string, unknown>;
+}
+
+export interface CleanupCategory {
+  title: string;
+  records: CleanupRecord[];
+}
+
+export interface CleanupPreview {
+  agent: CleanupAgent;
+  categories: Record<string, CleanupCategory>;
+}
+
+export interface CleanupAuditEntry {
+  id: string;
+  actor_admin_id: string;
+  actor_name: string;
+  target_type: CleanupAgentType;
+  target_id: string;
+  target_name: string;
+  deleted_records: Record<string, string[]>;
+  created_at: string;
+}
+
 export interface CommercialPointsVenteDiagnostic {
   commercial: {
     id: string;
