@@ -1,0 +1,9 @@
+{
+  "projectId": "69352004",
+  "functions": {
+    "auth-api": {
+      "hasChanged": false,
+      "hash": "16cfb99bbbdf5d0e3feafdb36297b17eaff595286c307218d3250897289745a4"
+    }
+  }
+}

@@ -307,7 +307,7 @@ export function FieldScanner() {
             <h1 className="text-xl font-bold text-gray-900 mb-2">Scanner un QR Code</h1>
             <p className="text-gray-500 text-sm mb-8">Appuyez sur le bouton ci-dessous pour ouvrir la caméra et scanner le QR code affiché dans le point de vente.</p>
             <button onClick={startCamera} className="btn-primary w-full text-base py-4"><Camera size={22} /> Ouvrir la caméra</button>
-            {hasPermission("use_geolocation") && hasPermission("scan") && hasPermission("record_vente") && (
+            {hasPermission("use_geolocation") && hasPermission("scan") && (
               <button onClick={startGeoloc} className="btn-secondary w-full mt-3"><Navigation size={18} /> Géolocaliser sans caméra</button>
             )}
             {hasPermission("create_point_vente") && (

@@ -2784,13 +2784,6 @@ async function handleRoute(req: Request): Promise<Response> {
       const isGeolocationVisit =
         existing.visit_method === "geolocation";
 
-      // La finalisation d'une visite par géolocalisation nécessite
-      // également l'autorisation d'enregistrer une vente.
-      if (isGeolocationVisit) {
-        const saleDenied = requirePermission("record_vente");
-        if (saleDenied) return saleDenied;
-      }
-
       // Empêcher la finalisation multiple d'une même visite.
       if (existing.vente_status !== "confirmed") {
         if (
