@@ -2697,7 +2697,7 @@ async function handleRoute(req: Request): Promise<Response> {
       }
 
       if (distance > MAX_DISTANCE_METERS) {
-        const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", user_role: userRole };
+        const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", visit_method: "qr", user_role: userRole };
         if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
         if (userTeamId) insertData.team_id = userTeamId;
         await supabase.from("visites").insert(insertData);
@@ -2711,7 +2711,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const { data: recent } = await dedupQuery.maybeSingle();
       if (recent) return jsonResponse({ status: "duplicate", message: `Une visite a déjà été enregistrée à ce point il y a moins de ${DOUBLE_SCAN_MINUTES} minutes.`, lastVisit: recent.visited_at }, 200);
 
-      const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "confirmed", vente_status: "confirmed", user_role: userRole };
+      const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "confirmed", vente_status: "confirmed", visit_method: "qr", user_role: userRole };
       if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
       if (userTeamId) insertData.team_id = userTeamId;
       const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
@@ -2724,37 +2724,156 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- FINALIZE VISIT ---
     if (path === "/visites/finalize" && method === "POST") {
-      const denied = requirePermission("scan"); if (denied) return denied;
+      const denied = requirePermission("scan");
+      if (denied) return denied;
+
       const { visite_id, vente_status, motif } = await req.json();
-      if (!visite_id || !vente_status) return jsonError(400, "Visite et statut de vente requis");
+
+      if (!visite_id || typeof vente_status !== "string") {
+        return jsonError(400, "Visite et statut de vente requis");
+      }
+
       const validStatuses = ["vente_realisee", "vente_non_realisee"];
-      if (userRole === "superviseur") validStatuses.push("promesse_achat");
-      if (!validStatuses.includes(vente_status)) return jsonError(400, "Statut de vente invalide");
-      if (vente_status === "vente_non_realisee" && motif && motif.trim()) {
-        if (!VENTE_NON_REALISEE_MOTIFS.includes(motif.trim())) return jsonError(400, "Motif invalide");
+      if (userRole === "superviseur") {
+        validStatuses.push("promesse_achat");
       }
-      const updates: Record<string, unknown> = { vente_status };
-      if (vente_status === "vente_non_realisee" && motif && motif.trim()) updates.motif = motif.trim();
-      const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
-      if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: existing } = await supabase.from("visites").select("id, status, vente_status").match(ownerFilter).maybeSingle();
-      if (!existing) return jsonError(404, "Visite introuvable");
-      // Only a visit whose GPS check passed, and which has not already been closed,
-      // may be finalized. Re-checked in the UPDATE itself so a concurrent call cannot slip through.
+
+      if (!validStatuses.includes(vente_status)) {
+        return jsonError(400, "Statut de vente invalide");
+      }
+
+      // Vérifier que la visite appartient bien à l'utilisateur connecté.
+      const ownerFilter: Record<string, unknown> =
+        userRole === "commercial"
+          ? { id: visite_id, commercial_id: userId }
+          : { id: visite_id, superviseur_id: userId };
+
+      if (userTeamId) {
+        ownerFilter.team_id = userTeamId;
+      }
+
+      const {
+        data: existing,
+        error: existingError,
+      } = await supabase
+        .from("visites")
+        .select("id, status, vente_status, visit_method")
+        .match(ownerFilter)
+        .maybeSingle();
+
+      if (existingError) {
+        return jsonError(
+          500,
+          "Erreur lors de la vérification de la visite"
+        );
+      }
+
+      if (!existing) {
+        return jsonError(404, "Visite introuvable");
+      }
+
+      // Une visite doit avoir été validée sur le terrain.
       if (existing.status !== "confirmed") {
-        return jsonError(409, "Cette visite n'a pas été validée sur le terrain et ne peut pas être finalisée.");
+        return jsonError(
+          409,
+          "Cette visite n'a pas été validée sur le terrain et ne peut pas être finalisée."
+        );
       }
+
+      // Déterminer le type de visite APRÈS avoir récupéré existing.
+      const isGeolocationVisit =
+        existing.visit_method === "geolocation";
+
+      // La finalisation d'une visite par géolocalisation nécessite
+      // également l'autorisation d'enregistrer une vente.
+      if (isGeolocationVisit) {
+        const saleDenied = requirePermission("record_vente");
+        if (saleDenied) return saleDenied;
+      }
+
+      // Empêcher la finalisation multiple d'une même visite.
       if (existing.vente_status !== "confirmed") {
+        if (
+          isGeolocationVisit &&
+          existing.vente_status === vente_status
+        ) {
+          return jsonResponse({
+            success: true,
+            visite_id,
+            vente_status,
+          });
+        }
+
         return jsonError(409, "Cette visite a déjà été finalisée.");
       }
-      const { data: updated, error } = await supabase.from("visites").update(updates)
-        .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed")
-        .select("id").maybeSingle();
-      if (error) return jsonError(500, "Erreur lors de la finalisation");
-      if (!updated) return jsonError(409, "Cette visite a déjà été finalisée.");
-      return jsonResponse({ success: true, visite_id, vente_status });
-    }
 
+      // En visite classique, un motif est obligatoire si la vente
+      // n'a pas été réalisée. En géolocalisation, aucun motif n'est demandé.
+      if (vente_status === "vente_non_realisee") {
+        if (isGeolocationVisit) {
+          if (
+            motif != null &&
+            (typeof motif !== "string" || motif.trim() !== "")
+          ) {
+            return jsonError(
+              400,
+              "Aucun motif ne doit être fourni pour une visite sans caméra"
+            );
+          }
+        } else {
+          if (typeof motif !== "string" || !motif.trim()) {
+            return jsonError(
+              400,
+              "Un motif est obligatoire pour une vente non réalisée"
+            );
+          }
+
+          if (!VENTE_NON_REALISEE_MOTIFS.includes(motif.trim())) {
+            return jsonError(400, "Motif invalide");
+          }
+        }
+      }
+
+      // Préparer une seule mise à jour.
+      const updates: Record<string, unknown> = {
+        vente_status,
+      };
+
+      if (vente_status === "vente_non_realisee") {
+        updates.motif = isGeolocationVisit ? null : motif.trim();
+      }
+
+      // La condition sur le statut empêche deux requêtes concurrentes
+      // de finaliser simultanément la même visite.
+      const {
+        data: updated,
+        error: updateError,
+      } = await supabase
+        .from("visites")
+        .update(updates)
+        .eq("id", visite_id)
+        .eq("status", "confirmed")
+        .eq("vente_status", "confirmed")
+        .select("id")
+        .maybeSingle();
+
+      if (updateError) {
+        return jsonError(500, "Erreur lors de la finalisation");
+      }
+
+      if (!updated) {
+        return jsonError(
+          409,
+          "Cette visite a déjà été finalisée."
+        );
+      }
+
+      return jsonResponse({
+        success: true,
+        visite_id,
+        vente_status,
+      });
+    }
     // --- CREATE VENTE (with multi-product lignes + auto BL) ---
     if (path === "/ventes" && method === "POST") {
       const denied = requirePermission("record_vente"); if (denied) return denied;
@@ -3403,7 +3522,10 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/geoloc-nearby" && method === "POST") {
       const denied = requirePermission("use_geolocation"); if (denied) return denied;
       const { latitude, longitude, radius } = await req.json();
-      if (typeof latitude !== "number" || typeof longitude !== "number") return jsonError(400, "Coordonnées GPS invalides");
+      if (typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90
+        || typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180) {
+        return jsonError(400, "Coordonnées GPS invalides");
+      }
       if (!userTeamId) return jsonError(400, "Une équipe est requise pour rechercher les POS proches");
       const maxRadius = Math.min(Math.max(typeof radius === "number" ? radius : 500, 50), 5000);
       const pointResult = await fetchAllRows((from, to) => supabase.from("points_vente")
@@ -3428,9 +3550,21 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/geoloc-visit" && method === "POST") {
       const denied = requirePermission("use_geolocation"); if (denied) return denied;
       const { point_vente_id, latitude, longitude, accuracy } = await req.json();
-      if (!point_vente_id || typeof latitude !== "number" || typeof longitude !== "number") return jsonError(400, "Paramètres invalides");
+      if (!point_vente_id || typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90
+        || typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180
+        || (accuracy != null && (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0))) {
+        return jsonError(400, "Paramètres invalides");
+      }
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour valider une visite géolocalisée");
+      if (typeof accuracy === "number" && accuracy > MAX_GPS_ACCURACY_METERS) {
+        return jsonResponse({
+          status: "poor_gps",
+          accuracy,
+          message: "Signal GPS insuffisant. Veuillez patienter quelques secondes avant de réessayer.",
+        });
+      }
       let pvQuery = supabase.from("points_vente").select("id, name, latitude, longitude, qr_token").eq("id", point_vente_id);
-      if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
+      pvQuery = pvQuery.eq("team_id", userTeamId);
       const { data: pv, error: pvError } = await pvQuery.maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
       const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
@@ -3445,14 +3579,27 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       // Check for duplicate visit today
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-      let dupQuery = supabase.from("visites").select("id, visited_at").eq("point_vente_id", point_vente_id).gte("visited_at", todayStart.toISOString());
+      let dupQuery = supabase.from("visites")
+        .select("id, visited_at, status, vente_status, visit_method, latitude, longitude, accuracy, distance_meters")
+        .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
+        .gte("visited_at", todayStart.toISOString()).order("visited_at", { ascending: false }).limit(1);
       if (userRole === "commercial") {
         dupQuery = dupQuery.eq("commercial_id", userId);
       } else {
         dupQuery = dupQuery.eq("superviseur_id", userId);
       }
-      const { data: existing } = await dupQuery.maybeSingle();
+      const { data: existing, error: duplicateError } = await dupQuery.maybeSingle();
+      if (duplicateError) return jsonError(500, "Erreur lors de la vérification des visites existantes");
       if (existing) {
+        if (existing.visit_method === "geolocation" && existing.status === "confirmed" && existing.vente_status === "confirmed") {
+          return jsonResponse({
+            status: "confirmed",
+            distance: existing.distance_meters,
+            accuracy: existing.accuracy,
+            visit: existing,
+            pointName: pv.name,
+          });
+        }
         return jsonResponse({
           status: "duplicate",
           message: "Vous avez déjà visité ce point de vente aujourd'hui.",
@@ -3466,17 +3613,23 @@ async function handleRoute(req: Request): Promise<Response> {
         accuracy: typeof accuracy === "number" ? accuracy : null,
         distance_meters: distance,
         status: "confirmed",
+        vente_status: "confirmed",
+        visit_method: "geolocation",
         user_role: userRole,
       };
       if (userRole === "commercial") insertData.commercial_id = userId;
       else insertData.superviseur_id = userId;
       if (userTeamId) insertData.team_id = userTeamId;
-      const { data: visit, error: visitError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status").maybeSingle();
-      if (visitError) return jsonError(500, "Erreur lors de l'enregistrement de la visite");
+      const { data: visit, error: visitError } = await supabase.from("visites").insert(insertData)
+        .select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
+      if (visitError || !visit) {
+        console.error("geoloc visite insert failed", visitError);
+        return jsonError(500, "Erreur lors de l'enregistrement de la visite");
+      }
       return jsonResponse({
         status: "confirmed",
         distance,
-        visit: { id: visit.id, visited_at: visit.visited_at, distance_meters: visit.distance_meters, status: visit.status, vente_status: null },
+        visit: { id: visit.id, visited_at: visit.visited_at, distance_meters: visit.distance_meters, status: visit.status, vente_status: visit.vente_status },
         pointName: pv.name,
       });
     }

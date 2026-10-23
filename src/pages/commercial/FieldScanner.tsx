@@ -44,6 +44,7 @@ export function FieldScanner() {
   const [motif, setMotif] = useState("");
   const [motifAutre, setMotifAutre] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
   // Multi-product vente
   const [venteLignes, setVenteLignes] = useState<VenteLigneForm[]>([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]);
@@ -151,15 +152,19 @@ export function FieldScanner() {
     try {
       const position = await getAccuratePosition(20000, 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitResult = await api.recordVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
+      const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
+      const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
       setResult(visitResult);
       setGpsStatus(null);
       if (visitResult.status === "confirmed") {
         setState("action");
-        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
+        if (!geoMode) {
+          try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
+        }
       }
     } catch (err) {
       if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
+      else if (err instanceof TypeError) setError("Erreur réseau. Vérifiez votre connexion et réessayez.");
       else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
     } finally {
       setRetrying(false);
@@ -180,8 +185,7 @@ export function FieldScanner() {
         setError("Aucun point de vente trouvé dans un rayon de 1 km autour de votre position.");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
-      setGeoMode(false);
+      setError(err instanceof TypeError ? "Erreur réseau. Vérifiez votre connexion et réessayez." : err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
     } finally {
       setGeoLoading(false);
     }
@@ -202,15 +206,14 @@ export function FieldScanner() {
       setGpsStatus(null);
       if (visitResult.status === "confirmed") {
         setState("action");
-        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
       } else {
         setState("result");
       }
     } catch (err) {
       if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
+      else if (err instanceof TypeError) setError("Erreur réseau. Vérifiez votre connexion et réessayez.");
       else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
       setState("idle");
-      setGeoMode(false);
     } finally {
       setGpsStatus(null);
     }
@@ -219,10 +222,14 @@ export function FieldScanner() {
   useEffect(() => { return () => stopCamera(); }, [stopCamera]);
 
   const handlePostAction = async () => {
-    if (!postAction || !result?.visit?.id || !pointId) return;
+    if (!postAction || !result?.visit?.id || !pointId || submittingRef.current) return;
+    if (geoMode && postAction !== "vente_realisee" && postAction !== "vente_non_realisee") return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
-      if (postAction === "promesse_achat") {
+      if (geoMode) {
+        await api.finalizeVisit({ visite_id: result.visit.id, vente_status: postAction });
+      } else if (postAction === "promesse_achat") {
         if (selectedProduits.length === 0) { setSubmitting(false); return; }
         await api.createPromesse({
           visite_id: result.visit.id,
@@ -254,8 +261,9 @@ export function FieldScanner() {
       setState("result");
       setResult({ ...result, status: "confirmed", visit: { ...result.visit!, vente_status: postAction } });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur lors de l'enregistrement");
+      setError(err instanceof TypeError ? "Erreur réseau. Vérifiez votre connexion et réessayez." : err instanceof Error ? err.message : "Erreur lors de l'enregistrement");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -299,7 +307,7 @@ export function FieldScanner() {
             <h1 className="text-xl font-bold text-gray-900 mb-2">Scanner un QR Code</h1>
             <p className="text-gray-500 text-sm mb-8">Appuyez sur le bouton ci-dessous pour ouvrir la caméra et scanner le QR code affiché dans le point de vente.</p>
             <button onClick={startCamera} className="btn-primary w-full text-base py-4"><Camera size={22} /> Ouvrir la caméra</button>
-            {hasPermission("use_geolocation") && (
+            {hasPermission("use_geolocation") && hasPermission("scan") && hasPermission("record_vente") && (
               <button onClick={startGeoloc} className="btn-secondary w-full mt-3"><Navigation size={18} /> Géolocaliser sans caméra</button>
             )}
             {hasPermission("create_point_vente") && (
@@ -311,7 +319,7 @@ export function FieldScanner() {
           </div>
         )}
 
-        {state === "idle" && error && (
+        {state === "idle" && error && !geoMode && (
           <div className="text-center max-w-sm animate-fade-in">
             <div className="w-20 h-20 rounded-full bg-error-50 flex items-center justify-center mx-auto mb-5"><CameraOff size={36} className="text-error-500" /></div>
             <h1 className="text-lg font-bold text-gray-900 mb-2">Erreur</h1>
@@ -333,23 +341,29 @@ export function FieldScanner() {
                 <p className="text-sm text-gray-500">Recherche des points de vente à proximité...</p>
               </div>
             ) : geoNearby.length > 0 ? (
-              <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
-                {geoNearby.map((p) => (
-                  <button key={p.id} onClick={() => selectGeolocPoint(p.id)} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-primary-200 transition-all text-left">
-                    <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0"><Store size={20} className="text-primary-600" /></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
-                      <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
-                      <p className="text-xs text-primary-600 font-semibold mt-0.5">{p.distance_meters} m</p>
-                    </div>
-                    <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
-                  </button>
-                ))}
-              </div>
+              <>
+                {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 mb-3 text-sm text-error-700">{error}</div>}
+                <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
+                  {geoNearby.map((p) => (
+                    <button key={p.id} onClick={() => selectGeolocPoint(p.id)} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-primary-200 transition-all text-left">
+                      <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0"><Store size={20} className="text-primary-600" /></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
+                        <p className="text-xs text-primary-600 font-semibold mt-0.5">{p.distance_meters} m</p>
+                      </div>
+                      <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : (
               <div className="text-center py-8">
                 <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3"><MapPin size={22} className="text-gray-400" /></div>
                 <p className="text-gray-500 text-sm mb-4">{error || "Aucun point trouvé à proximité."}</p>
+                <button onClick={startGeoloc} disabled={geoLoading} className="btn-primary w-full">
+                  {geoLoading ? "Recherche en cours..." : "Réessayer la géolocalisation"}
+                </button>
               </div>
             )}
             <button onClick={() => { setGeoMode(false); setError(null); }} className="btn-secondary w-full mt-4">Retour</button>
@@ -392,10 +406,39 @@ export function FieldScanner() {
               <div className="w-20 h-20 rounded-full bg-accent-50 flex items-center justify-center mx-auto mb-4"><CheckCircle2 size={44} className="text-accent-600" /></div>
               <h1 className="text-xl font-bold text-gray-900 mb-1">Présence validée</h1>
               {pointName && <p className="text-primary-700 font-semibold text-sm">{pointName}</p>}
-              <p className="text-gray-500 text-sm mt-2">Sélectionnez une action :</p>
+              <p className="text-gray-500 text-sm mt-2">{geoMode ? "Indiquez le résultat de la vente :" : "Sélectionnez une action :"}</p>
             </div>
 
-            {!postAction && (
+            {geoMode ? (
+              <div className="space-y-3">
+                {(["vente_realisee", "vente_non_realisee"] as const).map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    aria-pressed={postAction === status}
+                    onClick={() => { setPostAction(status); setError(null); }}
+                    className={`w-full card p-4 flex items-center gap-3 transition-all text-left ${
+                      postAction === status
+                        ? status === "vente_realisee" ? "ring-2 ring-success-300" : "ring-2 ring-error-300"
+                        : "hover:ring-2 hover:ring-primary-200"
+                    }`}
+                  >
+                    <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                      postAction === status ? "border-primary-600" : "border-gray-300"
+                    }`}>
+                      {postAction === status && <span className="w-2.5 h-2.5 rounded-full bg-primary-600" />}
+                    </span>
+                    <span className="font-semibold text-gray-900">
+                      {status === "vente_realisee" ? "Vente réalisée : OUI" : "Vente réalisée : NON"}
+                    </span>
+                  </button>
+                ))}
+                {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700">{error}</div>}
+                <button onClick={handlePostAction} disabled={submitting || !postAction} className="btn-primary w-full">
+                  {submitting ? "Soumission..." : "Soumettre"}
+                </button>
+              </div>
+            ) : !postAction && (
               <div className="space-y-3">
                 {hasPermission("create_promesse") && (
                   <button onClick={() => setPostAction("promesse_achat")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-warning-200 transition-all text-left">
@@ -425,7 +468,7 @@ export function FieldScanner() {
             )}
 
             {/* Promesse d'achat form */}
-            {postAction === "promesse_achat" && (
+            {!geoMode && postAction === "promesse_achat" && (
               <div className="card p-5 space-y-4">
                 <h2 className="font-bold text-gray-900 flex items-center gap-2"><Package size={20} className="text-warning-600" /> Promesse d'achat</h2>
                 <div>
@@ -472,7 +515,7 @@ export function FieldScanner() {
             )}
 
             {/* Vente réalisée - multi-product form */}
-            {(postAction === "vente_realisee" || postAction === "vente_livraison") && (
+            {!geoMode && (postAction === "vente_realisee" || postAction === "vente_livraison") && (
               <div className="card p-5 space-y-4">
                 <h2 className="font-bold text-gray-900 flex items-center gap-2">
                   {postAction === "vente_livraison" ? <Truck size={20} className="text-blue-600" /> : <TrendingUp size={20} className="text-success-600" />}
@@ -527,7 +570,7 @@ export function FieldScanner() {
             )}
 
             {/* Vente non réalisée - motif */}
-            {postAction === "vente_non_realisee" && (
+            {!geoMode && postAction === "vente_non_realisee" && (
               <div className="card p-5 space-y-4">
                 <h2 className="font-bold text-gray-900 flex items-center gap-2"><TrendingDown size={20} className="text-error-500" /> Vente non réalisée</h2>
                 <div>
@@ -560,6 +603,7 @@ export function FieldScanner() {
         {/* Final result */}
         {state === "result" && result && (
           <div className="w-full max-w-sm animate-scale-in">
+            {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 mb-4 text-sm text-error-700">{error}</div>}
             {result.status === "confirmed" && (
               <div className="text-center">
                 <div className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-5 ${
