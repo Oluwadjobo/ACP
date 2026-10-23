@@ -2724,54 +2724,156 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- FINALIZE VISIT ---
     if (path === "/visites/finalize" && method === "POST") {
-      const denied = requirePermission("scan"); if (denied) return denied;
+      const denied = requirePermission("scan");
+      if (denied) return denied;
+
       const { visite_id, vente_status, motif } = await req.json();
-      if (!visite_id || typeof vente_status !== "string") return jsonError(400, "Visite et statut de vente requis");
-      const validStatuses = ["vente_realisee", "vente_non_realisee"];
-      if (userRole === "superviseur") validStatuses.push("promesse_achat");
-      if (!validStatuses.includes(vente_status)) return jsonError(400, "Statut de vente invalide");
-      const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
-      if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: existing, error: existingError } = await supabase.from("visites")
-        .select("id, status, vente_status, visit_method").match(ownerFilter).maybeSingle();
-      if (existingError) return jsonError(500, "Erreur lors de la vérification de la visite");
-      if (!existing) return jsonError(404, "Visite introuvable");
-      // Only a visit whose GPS check passed, and which has not already been closed,
-      // may be finalized. Re-checked in the UPDATE itself so a concurrent call cannot slip through.
-      if (existing.status !== "confirmed") {
-        return jsonError(409, "Cette visite n'a pas été validée sur le terrain et ne peut pas être finalisée.");
+
+      if (!visite_id || typeof vente_status !== "string") {
+        return jsonError(400, "Visite et statut de vente requis");
       }
-      const isGeolocationVisit = existing.visit_method === "geolocation";
+
+      const validStatuses = ["vente_realisee", "vente_non_realisee"];
+      if (userRole === "superviseur") {
+        validStatuses.push("promesse_achat");
+      }
+
+      if (!validStatuses.includes(vente_status)) {
+        return jsonError(400, "Statut de vente invalide");
+      }
+
+      // Vérifier que la visite appartient bien à l'utilisateur connecté.
+      const ownerFilter: Record<string, unknown> =
+        userRole === "commercial"
+          ? { id: visite_id, commercial_id: userId }
+          : { id: visite_id, superviseur_id: userId };
+
+      if (userTeamId) {
+        ownerFilter.team_id = userTeamId;
+      }
+
+      const {
+        data: existing,
+        error: existingError,
+      } = await supabase
+        .from("visites")
+        .select("id, status, vente_status, visit_method")
+        .match(ownerFilter)
+        .maybeSingle();
+
+      if (existingError) {
+        return jsonError(
+          500,
+          "Erreur lors de la vérification de la visite"
+        );
+      }
+
+      if (!existing) {
+        return jsonError(404, "Visite introuvable");
+      }
+
+      // Une visite doit avoir été validée sur le terrain.
+      if (existing.status !== "confirmed") {
+        return jsonError(
+          409,
+          "Cette visite n'a pas été validée sur le terrain et ne peut pas être finalisée."
+        );
+      }
+
+      // Déterminer le type de visite APRÈS avoir récupéré existing.
+      const isGeolocationVisit =
+        existing.visit_method === "geolocation";
+
+      // La finalisation d'une visite par géolocalisation nécessite
+      // également l'autorisation d'enregistrer une vente.
       if (isGeolocationVisit) {
         const saleDenied = requirePermission("record_vente");
         if (saleDenied) return saleDenied;
       }
+
+      // Empêcher la finalisation multiple d'une même visite.
       if (existing.vente_status !== "confirmed") {
-        if (isGeolocationVisit && existing.vente_status === vente_status) {
-          return jsonResponse({ success: true, visite_id, vente_status });
+        if (
+          isGeolocationVisit &&
+          existing.vente_status === vente_status
+        ) {
+          return jsonResponse({
+            success: true,
+            visite_id,
+            vente_status,
+          });
         }
+
         return jsonError(409, "Cette visite a déjà été finalisée.");
       }
+
+      // En visite classique, un motif est obligatoire si la vente
+      // n'a pas été réalisée. En géolocalisation, aucun motif n'est demandé.
       if (vente_status === "vente_non_realisee") {
         if (isGeolocationVisit) {
-          if (motif != null && (typeof motif !== "string" || motif.trim())) {
-            return jsonError(400, "Aucun motif ne doit être fourni pour une visite sans caméra");
+          if (
+            motif != null &&
+            (typeof motif !== "string" || motif.trim() !== "")
+          ) {
+            return jsonError(
+              400,
+              "Aucun motif ne doit être fourni pour une visite sans caméra"
+            );
           }
         } else {
-          if (typeof motif !== "string" || !motif.trim()) return jsonError(400, "Un motif est obligatoire pour une vente non réalisée");
-          if (!VENTE_NON_REALISEE_MOTIFS.includes(motif.trim())) return jsonError(400, "Motif invalide");
+          if (typeof motif !== "string" || !motif.trim()) {
+            return jsonError(
+              400,
+              "Un motif est obligatoire pour une vente non réalisée"
+            );
+          }
+
+          if (!VENTE_NON_REALISEE_MOTIFS.includes(motif.trim())) {
+            return jsonError(400, "Motif invalide");
+          }
         }
       }
-      const updates: Record<string, unknown> = { vente_status };
-      if (vente_status === "vente_non_realisee") updates.motif = isGeolocationVisit ? null : motif.trim();
-      const { data: updated, error } = await supabase.from("visites").update(updates)
-        .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed")
-        .select("id").maybeSingle();
-      if (error) return jsonError(500, "Erreur lors de la finalisation");
-      if (!updated) return jsonError(409, "Cette visite a déjà été finalisée.");
-      return jsonResponse({ success: true, visite_id, vente_status });
-    }
 
+      // Préparer une seule mise à jour.
+      const updates: Record<string, unknown> = {
+        vente_status,
+      };
+
+      if (vente_status === "vente_non_realisee") {
+        updates.motif = isGeolocationVisit ? null : motif.trim();
+      }
+
+      // La condition sur le statut empêche deux requêtes concurrentes
+      // de finaliser simultanément la même visite.
+      const {
+        data: updated,
+        error: updateError,
+      } = await supabase
+        .from("visites")
+        .update(updates)
+        .eq("id", visite_id)
+        .eq("status", "confirmed")
+        .eq("vente_status", "confirmed")
+        .select("id")
+        .maybeSingle();
+
+      if (updateError) {
+        return jsonError(500, "Erreur lors de la finalisation");
+      }
+
+      if (!updated) {
+        return jsonError(
+          409,
+          "Cette visite a déjà été finalisée."
+        );
+      }
+
+      return jsonResponse({
+        success: true,
+        visite_id,
+        vente_status,
+      });
+    }
     // --- CREATE VENTE (with multi-product lignes + auto BL) ---
     if (path === "/ventes" && method === "POST") {
       const denied = requirePermission("record_vente"); if (denied) return denied;
