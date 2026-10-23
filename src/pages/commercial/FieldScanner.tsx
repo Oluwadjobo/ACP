@@ -283,9 +283,7 @@ export function FieldScanner() {
         <div className="flex items-center gap-1">
           <button onClick={() => navigate(tourneesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes tournées"><MapPin size={20} /></button>
           <button onClick={() => navigate(pointsPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Mes points de vente"><Store size={20} /></button>
-          {isSuperviseur && hasPermission("view_ventes_non_realisees") && (
-            <button onClick={() => navigate(ventesNonRealiseesPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Ventes non réalisées"><TrendingDown size={20} /></button>
-          )}
+
           {isSuperviseur && hasPermission("control_terrain") && (
             <button onClick={() => navigate(controleTerrainPath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg" title="Contrôle terrain"><ClipboardCheck size={20} /></button>
           )}
@@ -440,7 +438,7 @@ export function FieldScanner() {
               </div>
             ) : !postAction && (
               <div className="space-y-3">
-                {hasPermission("create_promesse") && (
+                {isSuperviseur && hasPermission("create_promesse") && (
                   <button onClick={() => setPostAction("promesse_achat")} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-warning-200 transition-all text-left">
                     <div className="w-12 h-12 rounded-xl bg-warning-50 flex items-center justify-center"><Package size={24} className="text-warning-600" /></div>
                     <div className="flex-1"><p className="font-semibold text-gray-900 text-sm">Promesse d'achat</p><p className="text-xs text-gray-500">Enregistrer une intention d'achat</p></div>
