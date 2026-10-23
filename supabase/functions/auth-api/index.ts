@@ -2730,12 +2730,11 @@ async function handleRoute(req: Request): Promise<Response> {
       const validStatuses = ["vente_realisee", "vente_non_realisee"];
       if (userRole === "superviseur") validStatuses.push("promesse_achat");
       if (!validStatuses.includes(vente_status)) return jsonError(400, "Statut de vente invalide");
-      if (vente_status === "vente_non_realisee") {
-        if (!motif || !motif.trim()) return jsonError(400, "Un motif est obligatoire pour une vente non réalisée");
+      if (vente_status === "vente_non_realisee" && motif && motif.trim()) {
         if (!VENTE_NON_REALISEE_MOTIFS.includes(motif.trim())) return jsonError(400, "Motif invalide");
       }
       const updates: Record<string, unknown> = { vente_status };
-      if (vente_status === "vente_non_realisee") updates.motif = motif.trim();
+      if (vente_status === "vente_non_realisee" && motif && motif.trim()) updates.motif = motif.trim();
       const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
       if (userTeamId) ownerFilter.team_id = userTeamId;
       const { data: existing } = await supabase.from("visites").select("id, status, vente_status").match(ownerFilter).maybeSingle();
