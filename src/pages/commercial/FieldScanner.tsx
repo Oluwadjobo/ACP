@@ -114,7 +114,7 @@ export function FieldScanner() {
       setPointId(point.id);
 
       setGpsStatus("Récupération de votre position GPS (haute précision)...");
-      const position = await getAccuratePosition(20000, 15);
+      const position = await getAccuratePosition(25000, 15);
 
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
@@ -150,7 +150,7 @@ export function FieldScanner() {
     setError(null);
     setGpsStatus("Nouvelle tentative GPS (haute précision)...");
     try {
-      const position = await getAccuratePosition(20000, 15);
+      const position = await getAccuratePosition(25000, 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
       const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
@@ -178,7 +178,7 @@ export function FieldScanner() {
     setGeoLoading(true);
     setGeoNearby([]);
     try {
-      const position = await getAccuratePosition(20000, 50);
+      const position = await getAccuratePosition(25000, 25);
       const nearby = await api.geolocNearby({ latitude: position.latitude, longitude: position.longitude, radius: 1000 });
       setGeoNearby(nearby);
       if (nearby.length === 0) {
@@ -196,7 +196,7 @@ export function FieldScanner() {
     setGpsStatus("Récupération de votre position GPS (haute précision)...");
     setState("resolving");
     try {
-      const position = await getAccuratePosition(20000, 15);
+      const position = await getAccuratePosition(25000, 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
       const selectedPoint = geoNearby.find((p) => p.id === pointId);
