@@ -150,7 +150,7 @@ export function FieldScanner() {
     setError(null);
     setGpsStatus("Nouvelle tentative GPS (haute précision)...");
     try {
-      const position = await getAccuratePosition(20000, 15);
+      const position = await getAccuratePosition(20000, geoMode ? 30 : 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
       const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
@@ -196,7 +196,7 @@ export function FieldScanner() {
     setGpsStatus("Récupération de votre position GPS (haute précision)...");
     setState("resolving");
     try {
-      const position = await getAccuratePosition(20000, 15);
+      const position = await getAccuratePosition(20000, 30);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
       const selectedPoint = geoNearby.find((p) => p.id === pointId);
@@ -691,7 +691,9 @@ export function FieldScanner() {
                       <span className="text-gray-500 flex items-center gap-1.5"><MapPin size={14} /> Précision actuelle</span>
                       <span className="font-bold text-warning-600">±{Math.round(result.accuracy)} m</span>
                     </div>
-                    <p className="text-xs text-gray-400 mt-2 text-center">Une précision de 15 m ou moins est requise pour valider le scan.</p>
+                    <p className="text-xs text-gray-400 mt-2 text-center">
+                      Une précision de {geoMode ? 30 : 15} m ou moins est requise pour valider la visite.
+                    </p>
                   </div>
                 )}
                 <div className="space-y-2">
