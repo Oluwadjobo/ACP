@@ -18,6 +18,7 @@ const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
 const MAX_DISTANCE_METERS = 30;
 const MAX_GPS_ACCURACY_METERS = 15;
+const MAX_GEOLOCATION_GPS_ACCURACY_METERS = 25;
 
 const VENTE_NON_REALISEE_MOTIFS = [
   "Rupture de stock",
@@ -3549,7 +3550,7 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonError(400, "Paramètres invalides");
       }
       if (!userTeamId) return jsonError(400, "Une équipe est requise pour valider une visite géolocalisée");
-      if (typeof accuracy === "number" && accuracy > MAX_GPS_ACCURACY_METERS) {
+      if (typeof accuracy === "number" && accuracy > MAX_GEOLOCATION_GPS_ACCURACY_METERS) {
         return jsonResponse({
           status: "poor_gps",
           accuracy,
