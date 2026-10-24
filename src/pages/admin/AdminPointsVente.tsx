@@ -439,7 +439,7 @@ function PointVenteModal({
     setGettingGps(true);
     showToast("success", "GPS en cours : restez immobile jusqu'à 20 s pour une précision optimale");
     try {
-      const pos = await getAccuratePosition(20000, 10);
+      const pos = await getAccuratePosition(20000, 10, { allowBestAvailable: true });
       setLatitude(pos.latitude.toFixed(6));
       setLongitude(pos.longitude.toFixed(6));
       showToast("success", `Position captée (précision ±${Math.round(pos.accuracy)} m)`);

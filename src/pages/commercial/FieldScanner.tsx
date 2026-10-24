@@ -6,7 +6,7 @@ import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
 import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { getAccuratePosition } from "@/lib/gps";
+import { getAccuratePosition, GpsAccuracyError } from "@/lib/gps";
 
 type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
 type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | "promesse_achat" | null;
@@ -116,7 +116,7 @@ export function FieldScanner() {
       setGpsStatus("Récupération de votre position GPS (haute précision)...");
       const position = await getAccuratePosition(20000, 15);
 
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      setGpsStatus(`Précision GPS obtenue : ±${Math.round(position.accuracy)} m (maximum 15 m). Validation en cours...`);
       const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
 
       setResult(visitResult);
@@ -151,7 +151,7 @@ export function FieldScanner() {
     setGpsStatus("Nouvelle tentative GPS (haute précision)...");
     try {
       const position = await getAccuratePosition(20000, geoMode ? 30 : 15);
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      setGpsStatus(`Précision GPS obtenue : ±${Math.round(position.accuracy)} m (maximum ${geoMode ? 30 : 15} m). Validation en cours...`);
       const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
       const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
       setResult(visitResult);
@@ -161,9 +161,12 @@ export function FieldScanner() {
         if (!geoMode) {
           try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
         }
+      } else {
+        setState("result");
       }
     } catch (err) {
-      if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
+      if (err instanceof GpsAccuracyError) setError(err.message);
+      else if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
       else if (err instanceof TypeError) setError("Erreur réseau. Vérifiez votre connexion et réessayez.");
       else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
     } finally {
@@ -178,7 +181,8 @@ export function FieldScanner() {
     setGeoLoading(true);
     setGeoNearby([]);
     try {
-      const position = await getAccuratePosition(20000, 50);
+      const position = await getAccuratePosition(20000, 50, { allowBestAvailable: true });
+      setGpsStatus(`Précision GPS obtenue : ±${Math.round(position.accuracy)} m (maximum 50 m pour la recherche des points).`);
       const nearby = await api.geolocNearby({ latitude: position.latitude, longitude: position.longitude, radius: 1000 });
       setGeoNearby(nearby);
       if (nearby.length === 0) {
@@ -187,17 +191,20 @@ export function FieldScanner() {
     } catch (err) {
       setError(err instanceof TypeError ? "Erreur réseau. Vérifiez votre connexion et réessayez." : err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
     } finally {
+      setGpsStatus(null);
       setGeoLoading(false);
     }
   };
 
   const selectGeolocPoint = async (pointId: string) => {
     setError(null);
+    setPointId(pointId);
+    setPointName(geoNearby.find((p) => p.id === pointId)?.name || null);
     setGpsStatus("Récupération de votre position GPS (haute précision)...");
     setState("resolving");
     try {
       const position = await getAccuratePosition(20000, 30);
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
+      setGpsStatus(`Précision GPS obtenue : ±${Math.round(position.accuracy)} m (maximum 30 m). Validation en cours...`);
       const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
       const selectedPoint = geoNearby.find((p) => p.id === pointId);
       setPointName(selectedPoint?.name || visitResult.pointName || null);
@@ -324,7 +331,9 @@ export function FieldScanner() {
             <div className="w-20 h-20 rounded-full bg-error-50 flex items-center justify-center mx-auto mb-5"><CameraOff size={36} className="text-error-500" /></div>
             <h1 className="text-lg font-bold text-gray-900 mb-2">Erreur</h1>
             <p className="text-gray-500 text-sm mb-6">{error}</p>
-            <button onClick={startCamera} className="btn-primary w-full"><RefreshCw size={18} /> Réessayer</button>
+            <button onClick={pointId ? retryGps : startCamera} disabled={retrying} className="btn-primary w-full">
+              {retrying ? <><Loader2 size={18} className="animate-spin" /> Nouvelle tentative GPS...</> : <><RefreshCw size={18} /> {pointId ? "Réessayer le GPS" : "Réessayer"}</>}
+            </button>
           </div>
         )}
 
@@ -343,6 +352,11 @@ export function FieldScanner() {
             ) : geoNearby.length > 0 ? (
               <>
                 {error && <div className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 mb-3 text-sm text-error-700">{error}</div>}
+                {error && pointId && (
+                  <button onClick={() => selectGeolocPoint(pointId)} disabled={geoLoading} className="btn-primary w-full mb-3">
+                    <MapPin size={18} /> Réessayer le GPS pour ce point
+                  </button>
+                )}
                 <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
                   {geoNearby.map((p) => (
                     <button key={p.id} onClick={() => selectGeolocPoint(p.id)} className="w-full card p-4 flex items-center gap-3 hover:ring-2 hover:ring-primary-200 transition-all text-left">
@@ -741,7 +755,7 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
   const useMyGps = async () => {
     setGettingGps(true);
     try {
-      const pos = await getAccuratePosition(20000, 10);
+      const pos = await getAccuratePosition(20000, 10, { allowBestAvailable: true });
       setLatitude(pos.latitude.toFixed(6));
       setLongitude(pos.longitude.toFixed(6));
     } catch (err) {

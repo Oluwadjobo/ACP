@@ -2685,17 +2685,23 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/visites" && method === "POST") {
       const denied = requirePermission("scan"); if (denied) return denied;
       const { point_vente_id, latitude, longitude, accuracy } = await req.json();
-      if (!point_vente_id || latitude == null || longitude == null) return jsonError(400, "Données de visite incomplètes");
+      if (!point_vente_id) return jsonError(400, "Données de visite incomplètes");
+      if (typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90
+        || typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180) {
+        return jsonError(400, "Coordonnées GPS invalides");
+      }
+      if (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0) {
+        return jsonError(400, "Précision GPS requise et doit être un nombre fini supérieur ou égal à zéro");
+      }
+      if (accuracy > MAX_GPS_ACCURACY_METERS) {
+        return jsonResponse({ status: "poor_gps", accuracy, message: `Signal GPS insuffisant. Une précision de ${MAX_GPS_ACCURACY_METERS} m ou moins est requise.` }, 200);
+      }
       let pvQuery = supabase.from("points_vente").select("id, latitude, longitude, name").eq("id", point_vente_id);
       if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
       const { data: pv, error: pvError } = await pvQuery.maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
       const distance = haversineMeters(Number(latitude), Number(longitude), pv.latitude, pv.longitude);
-      const acc = accuracy != null ? Number(accuracy) : null;
-
-      if (acc != null && acc > MAX_GPS_ACCURACY_METERS) {
-        return jsonResponse({ status: "poor_gps", accuracy: acc, message: "Signal GPS insuffisant. Veuillez patienter quelques secondes ou vous déplacer dans une zone mieux couverte avant de réessayer." }, 200);
-      }
+      const acc = accuracy;
 
       if (distance > MAX_DISTANCE_METERS) {
         const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", visit_method: "qr", user_role: userRole };
@@ -3553,11 +3559,11 @@ async function handleRoute(req: Request): Promise<Response> {
       const { point_vente_id, latitude, longitude, accuracy } = await req.json();
       if (!point_vente_id || typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90
         || typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180
-        || (accuracy != null && (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0))) {
+        || typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0) {
         return jsonError(400, "Paramètres invalides");
       }
       if (!userTeamId) return jsonError(400, "Une équipe est requise pour valider une visite géolocalisée");
-      if (typeof accuracy === "number" && accuracy > MAX_GEOLOCATION_GPS_ACCURACY_METERS) {
+      if (accuracy > MAX_GEOLOCATION_GPS_ACCURACY_METERS) {
         return jsonResponse({
           status: "poor_gps",
           accuracy,
