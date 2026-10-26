@@ -739,7 +739,7 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
   const useMyGps = async () => {
     setGettingGps(true);
     try {
-      const pos = await getAccuratePosition(20000, 10);
+      const pos = await getAccuratePosition(20000, 30);
       setLatitude(pos.latitude.toFixed(6));
       setLongitude(pos.longitude.toFixed(6));
     } catch (err) {
