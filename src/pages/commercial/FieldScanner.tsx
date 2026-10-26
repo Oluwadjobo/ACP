@@ -55,6 +55,7 @@ export function FieldScanner() {
   const [geoMode, setGeoMode] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoNearby, setGeoNearby] = useState<{ id: string; code: string; name: string; address: string; city: string; distance_meters: number }[]>([]);
+  const geoPositionRef = useRef<{ latitude: number; longitude: number; accuracy: number } | null>(null);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -141,7 +142,7 @@ export function FieldScanner() {
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
     setVenteLignes([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]); setVenteObservation(""); setBlNumero(null);
     setRetrying(false);
-    setGeoMode(false); setGeoNearby([]);
+    setGeoMode(false); setGeoNearby([]); geoPositionRef.current = null;
   };
 
   const retryGps = async () => {
@@ -150,7 +151,7 @@ export function FieldScanner() {
     setError(null);
     setGpsStatus("Nouvelle tentative GPS (haute précision)...");
     try {
-      const position = await getAccuratePosition(25000, 15);
+      const position = await getAccuratePosition(25000, geoMode ? 25 : 15);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
       const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
@@ -179,6 +180,7 @@ export function FieldScanner() {
     setGeoNearby([]);
     try {
       const position = await getAccuratePosition(25000, 25);
+      geoPositionRef.current = position;
       const nearby = await api.geolocNearby({ latitude: position.latitude, longitude: position.longitude, radius: 1000 });
       setGeoNearby(nearby);
       if (nearby.length === 0) {
@@ -196,7 +198,7 @@ export function FieldScanner() {
     setGpsStatus("Récupération de votre position GPS (haute précision)...");
     setState("resolving");
     try {
-      const position = await getAccuratePosition(25000, 15);
+      const position = geoPositionRef.current ?? await getAccuratePosition(25000, 25);
       setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
       const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
       const selectedPoint = geoNearby.find((p) => p.id === pointId);
@@ -348,7 +350,7 @@ export function FieldScanner() {
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
                         <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
-                        <p className="text-xs text-primary-600 font-semibold mt-0.5">{p.distance_meters} m</p>
+                        <p className="text-xs text-primary-600 font-semibold mt-0.5">Distance estimée : {Math.round(p.distance_meters)} m</p>
                       </div>
                       <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
                     </button>
@@ -689,7 +691,7 @@ export function FieldScanner() {
                       <span className="text-gray-500 flex items-center gap-1.5"><MapPin size={14} /> Précision actuelle</span>
                       <span className="font-bold text-warning-600">±{Math.round(result.accuracy)} m</span>
                     </div>
-                    <p className="text-xs text-gray-400 mt-2 text-center">Une précision de 15 m ou moins est requise pour valider le scan.</p>
+                    <p className="text-xs text-gray-400 mt-2 text-center">Une précision de {geoMode ? 25 : 15} m ou moins est requise pour valider {geoMode ? "la géolocalisation" : "le scan"}.</p>
                   </div>
                 )}
                 <div className="space-y-2">

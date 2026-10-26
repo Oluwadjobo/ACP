@@ -85,6 +85,21 @@ export function getAccuratePosition(
     );
 
     // Outer timeout: resolve with the best reading collected so far.
-    setTimeout(() => finish(bestPos), timeoutMs);
+    setTimeout(() => {
+      if (bestPos && bestPos.accuracy <= minAccuracy) {
+        finish(bestPos);
+        return;
+      }
+
+      if (resolved) return;
+      resolved = true;
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      const accuracy = bestPos ? Math.round(bestPos.accuracy) : null;
+      reject(new Error(
+        accuracy === null
+          ? "Impossible d'obtenir une précision GPS suffisante. Vérifiez que le GPS est activé et réessayez."
+          : `Précision GPS insuffisante (±${accuracy} m). Attendez quelques secondes ou déplacez-vous dans une zone mieux couverte, puis réessayez.`
+      ));
+    }, timeoutMs);
   });
 }
