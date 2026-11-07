@@ -356,6 +356,21 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  reportPdvGps: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy: number | null }) =>
+    apiRequest<{ status: "created" | "updated"; report_id: string; attempt_count: number }>("/pdv-gps-reports", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listPdvGpsReports: () =>
+    apiRequest<import("@/types").PdvGpsReport[]>("/pdv-gps-reports"),
+
+  resolvePdvGpsReport: (id: string, body: { status: "resolved" | "dismissed"; note?: string }) =>
+    apiRequest<{ success: boolean }>(`/pdv-gps-reports/${id}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   geolocNearby: (body: { latitude: number; longitude: number; radius?: number }) =>
     apiRequest<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; distance_meters: number }[]>("/geoloc-nearby", {
       method: "POST",
