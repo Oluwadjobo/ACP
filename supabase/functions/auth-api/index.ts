@@ -507,6 +507,169 @@ function parseCoordinate(value: unknown, min: number, max: number): number | nul
   return Number.isFinite(coordinate) && coordinate >= min && coordinate <= max ? coordinate : null;
 }
 
+const DAILY_REPORT_COLUMNS = [
+  "Commercial",
+  "Hors zone",
+  "Présence confirmée",
+  "Vente non réalisée",
+  "Vente réalisée",
+  "Total général",
+];
+const DAILY_REPORT_TEAMS = ["EAU", "YAOURT", "OPLANETE"];
+
+interface DailyReportRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  out_of_zone: number;
+  presence_confirmed: number;
+  sale_not_realized: number;
+  sale_realized: number;
+  total: number;
+}
+
+interface DailyReportData {
+  columns: string[];
+  rows: DailyReportRow[];
+  totals: Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation">;
+}
+
+function isIsoReportDate(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function portoNovoMidnight(date: string): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  const utcGuess = Date.UTC(year, month - 1, day);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Porto-Novo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(utcGuess));
+  const part = (name: string) => Number(parts.find((item) => item.type === name)?.value);
+  const representedAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
+  return new Date(utcGuess - (representedAsUtc - utcGuess));
+}
+
+function classifyDailyReportVisit(visit: { status: string | null; vente_status: string | null }): keyof Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation" | "total"> | null {
+  if (visit.status === "out_of_zone" || visit.vente_status === "out_of_zone") return "out_of_zone";
+  if (visit.status === "confirmed" && visit.vente_status === "confirmed") return "presence_confirmed";
+  if (visit.vente_status === "vente_non_realisee") return "sale_not_realized";
+  if (visit.vente_status === "vente_realisee" || visit.vente_status === "vente_livraison") return "sale_realized";
+  return null;
+}
+
+async function buildDailyReportData(teamId: string, reportDate: string): Promise<DailyReportData> {
+  const start = portoNovoMidnight(reportDate);
+  const nextDate = new Date(Date.parse(`${reportDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+  const end = portoNovoMidnight(nextDate);
+  const visitsResult = await fetchAllRows((from, to) => supabase
+    .from("visites")
+    .select("id, commercial_id, status, vente_status", { count: "exact" })
+    .eq("team_id", teamId)
+    .gte("visited_at", start.toISOString())
+    .lt("visited_at", end.toISOString())
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (visitsResult.error) throw new Error("Impossible de lire les visites de la journée");
+
+  const countable = visitsResult.data
+    .map((visit) => ({ visit, category: classifyDailyReportVisit(visit as { status: string | null; vente_status: string | null }) }))
+    .filter((entry) => entry.category !== null && typeof entry.visit.commercial_id === "string");
+  const commercialIds = [...new Set(countable.map((entry) => String(entry.visit.commercial_id)))];
+  const commercialResult = commercialIds.length
+    ? await fetchAllRows((from, to) => supabase
+      .from("commerciaux")
+      .select("id, full_name", { count: "exact" })
+      .order("full_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to))
+    : { data: [], error: null, pagination: null };
+  if (commercialResult.error) throw new Error("Impossible de lire les commerciaux du rapport");
+  const commercialRows = commercialResult.data as { id: string; full_name: string }[];
+  const names = new Map(commercialRows.map((commercial) => [commercial.id, commercial.full_name]));
+  const commercialOrder = new Map(commercialRows.map((commercial, index) => [commercial.id, index]));
+  const grouped = new Map<string, DailyReportRow>();
+  for (const { visit, category } of countable) {
+    const commercialId = String(visit.commercial_id);
+    const name = names.get(commercialId);
+    if (!name) continue;
+    let row = grouped.get(commercialId);
+    if (!row) {
+      row = {
+        commercial_id: commercialId,
+        commercial_name_at_generation: name,
+        out_of_zone: 0,
+        presence_confirmed: 0,
+        sale_not_realized: 0,
+        sale_realized: 0,
+        total: 0,
+      };
+      grouped.set(commercialId, row);
+    }
+    row[category!] += 1;
+    row.total += 1;
+  }
+
+  const rows = [...grouped.values()].sort((a, b) =>
+    b.total - a.total
+    || (commercialOrder.get(a.commercial_id) ?? Number.MAX_SAFE_INTEGER)
+      - (commercialOrder.get(b.commercial_id) ?? Number.MAX_SAFE_INTEGER)
+  );
+  const totals = rows.reduce((acc, row) => ({
+    out_of_zone: acc.out_of_zone + row.out_of_zone,
+    presence_confirmed: acc.presence_confirmed + row.presence_confirmed,
+    sale_not_realized: acc.sale_not_realized + row.sale_not_realized,
+    sale_realized: acc.sale_realized + row.sale_realized,
+    total: acc.total + row.total,
+  }), { out_of_zone: 0, presence_confirmed: 0, sale_not_realized: 0, sale_realized: 0, total: 0 });
+
+  return { columns: DAILY_REPORT_COLUMNS, rows, totals };
+}
+
+function dailyReportConversion(data: DailyReportData): number {
+  if (data.totals.total === 0) return 0;
+  const denominator = BigInt(data.totals.total);
+  const numerator = BigInt(data.totals.sale_realized) * 10_000n;
+  const roundedHundredths = (numerator * 2n + denominator) / (denominator * 2n);
+  return Number(roundedHundredths) / 100;
+}
+
+function dailyReportComment(teamName: string, reportDate: string, data: DailyReportData): string {
+  const totals = data.totals;
+  if (totals.total === 0) return `Le ${reportDate}, aucune visite comptabilisable n'a été enregistrée pour ${teamName}.`;
+  return `Le ${reportDate}, ${teamName} totalise ${totals.total} visite${totals.total > 1 ? "s" : ""} : ${totals.out_of_zone} hors zone, ${totals.presence_confirmed} présence${totals.presence_confirmed > 1 ? "s" : ""} confirmée${totals.presence_confirmed > 1 ? "s" : ""}, ${totals.sale_not_realized} vente${totals.sale_not_realized > 1 ? "s" : ""} non réalisée${totals.sale_not_realized > 1 ? "s" : ""} et ${totals.sale_realized} vente${totals.sale_realized > 1 ? "s" : ""} réalisée${totals.sale_realized > 1 ? "s" : ""}. Taux de conversion : ${dailyReportConversion(data).toFixed(2)} %.`;
+}
+
+function dailyReportRpcError(error: { code?: string; message?: string }): Response {
+  if (error.code === "23505") return jsonError(409, "Un instantané existe déjà pour cette équipe et cette date.");
+  if (error.code === "40001") return jsonError(409, "L'instantané a changé. Rechargez-le avant de réessayer.");
+  if (error.code === "42501") return jsonError(403, "Opération réservée au Super Admin.");
+  if (error.code === "22023" && error.message?.includes("Le contenu ne correspond pas")) {
+    return jsonError(409, "Les visites ont changé pendant le calcul. Rechargez le rapport et réessayez.");
+  }
+  if (error.code === "22023") return jsonError(400, error.message || "Données de rapport invalides.");
+  if (error.code === "P0002") return jsonError(404, "Instantané introuvable.");
+  return jsonError(500, "Erreur lors de l'enregistrement du rapport.");
+}
+
+async function readDailyReportBody(req: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const body: unknown = await req.json();
+    return body !== null && typeof body === "object" && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // ============ HIERARCHY HELPERS (tenant-aware) ============
 
 async function getCommercialSecteur(commercialId: string, teamId: string | null): Promise<{ secteur_id: string | null; superviseur_id: string | null }> {
@@ -939,6 +1102,10 @@ async function handleRoute(req: Request): Promise<Response> {
   const session = await getSession(token);
   if (!session) return jsonError(401, "Session expirée");
 
+  if (path.startsWith("/daily-reports") && session.user_type !== "admin") {
+    return jsonError(403, "Réservé au super administrateur");
+  }
+
   const userTable = session.user_type === "admin" ? "admins" : session.user_type === "superviseur" ? "superviseurs" : session.user_type === "agent_livreur" ? "agents_livreur" : "commerciaux";
   if (path === "/change-password" && method === "POST") {
     const { newPassword } = await req.json();
@@ -977,6 +1144,174 @@ async function handleRoute(req: Request): Promise<Response> {
     // A pending password change is enforced server-side, not only by the UI.
     if (adminRecord.must_change_password && path !== "/change-password") {
       return jsonError(403, "Vous devez changer votre mot de passe avant de continuer");
+    }
+
+    if (path.startsWith("/daily-reports")) {
+      if (adminRole !== "super_admin") return jsonError(403, "Réservé au super administrateur");
+
+      const reportDate = (value: string | null) => isIsoReportDate(value);
+      const validTeamId = (value: string | null) =>
+        Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+      const loadTeam = async (id: string) => {
+        const { data, error } = await supabase.from("teams")
+          .select("id, code, name, color, created_at")
+          .eq("id", id)
+          .in("code", DAILY_REPORT_TEAMS)
+          .maybeSingle();
+        return { data, error };
+      };
+      const loadSnapshot = async (teamId: string, date: string) => {
+        const { data, error } = await supabase.from("daily_report_snapshots")
+          .select("*")
+          .eq("team_id", teamId)
+          .eq("report_date", date)
+          .maybeSingle();
+        return { data, error };
+      };
+      const compareComment = (
+        first: Record<string, unknown> | null,
+        second: Record<string, unknown> | null,
+        firstDate: string,
+        secondDate: string,
+      ) => {
+        if (!first || !second) return `Comparaison indisponible : générez d'abord l'instantané manquant (${!first ? firstDate : ""}${!first && !second ? " et " : ""}${!second ? secondDate : ""}).`;
+        const firstTotal = Number(first.total_general);
+        const secondTotal = Number(second.total_general);
+        const totalDelta = secondTotal - firstTotal;
+        const firstRate = Number(first.conversion_rate);
+        const secondRate = Number(second.conversion_rate);
+        const rateDelta = secondRate - firstRate;
+        const direction = totalDelta > 0 ? "en hausse" : totalDelta < 0 ? "en baisse" : "stable";
+        const rateDirection = rateDelta > 0 ? "en hausse" : rateDelta < 0 ? "en baisse" : "stable";
+        return `Entre le ${firstDate} et le ${secondDate}, le total des visites est ${direction} de ${Math.abs(totalDelta)} (${totalDelta > 0 ? "+" : ""}${totalDelta}). Le taux de conversion passe de ${firstRate.toFixed(2)} % à ${secondRate.toFixed(2)} %, ${rateDirection} de ${Math.abs(rateDelta).toFixed(2)} point${Math.abs(rateDelta) === 1 ? "" : "s"}.`;
+      };
+
+      if (path === "/daily-reports/teams" && method === "GET") {
+        const { data, error } = await supabase.from("teams")
+          .select("id, code, name, color, created_at")
+          .in("code", DAILY_REPORT_TEAMS)
+          .order("code", { ascending: true });
+        if (error) return jsonError(500, "Impossible de charger les équipes");
+        const order = new Map(DAILY_REPORT_TEAMS.map((code, index) => [code, index]));
+        return jsonResponse((data || []).sort((a, b) => (order.get(a.code) ?? 99) - (order.get(b.code) ?? 99)));
+      }
+
+      if (path === "/daily-reports/snapshot" && method === "GET") {
+        const teamId = url.searchParams.get("team_id");
+        const date = url.searchParams.get("report_date");
+        if (!validTeamId(teamId) || !reportDate(date)) return jsonError(400, "Équipe ou date invalide");
+        const { data: team, error: teamError } = await loadTeam(teamId);
+        if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
+        if (!team) return jsonError(404, "Équipe introuvable");
+        const { data: snapshot, error } = await loadSnapshot(teamId, date);
+        if (error) return jsonError(500, "Impossible de charger l'instantané");
+        if (!snapshot) return jsonResponse({ snapshot: null, audit: [] });
+        const { data: audit, error: auditError } = await fetchAllRows((from, to) => supabase.from("daily_report_regeneration_audit")
+          .select("id, previous_version, replacement_version, previous_snapshot, replacement_snapshot, regenerated_at, regenerated_by, regenerated_by_name", { count: "exact" })
+          .eq("report_id", snapshot.id)
+          .order("replacement_version", { ascending: false })
+          .range(from, to));
+        if (auditError) return jsonError(500, "Impossible de charger l'historique des régénérations");
+        return jsonResponse({ snapshot, audit: audit || [] });
+      }
+
+      if (path === "/daily-reports/compare" && method === "GET") {
+        const teamId = url.searchParams.get("team_id");
+        const firstDate = url.searchParams.get("date_a");
+        const secondDate = url.searchParams.get("date_b");
+        if (!validTeamId(teamId) || !reportDate(firstDate) || !reportDate(secondDate)) {
+          return jsonError(400, "Équipe ou dates de comparaison invalides");
+        }
+        const { data: team, error: teamError } = await loadTeam(teamId);
+        if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
+        if (!team) return jsonError(404, "Équipe introuvable");
+        const [firstResult, secondResult] = await Promise.all([
+          loadSnapshot(teamId, firstDate),
+          loadSnapshot(teamId, secondDate),
+        ]);
+        if (firstResult.error || secondResult.error) return jsonError(500, "Impossible de charger les instantanés");
+        return jsonResponse({
+          team,
+          date_a: { date: firstDate, snapshot: firstResult.data },
+          date_b: { date: secondDate, snapshot: secondResult.data },
+          analytical_comment: compareComment(firstResult.data, secondResult.data, firstDate, secondDate),
+        });
+      }
+
+      if (path === "/daily-reports/generate" && method === "POST") {
+        const body = await readDailyReportBody(req);
+        if (!body) return jsonError(400, "Corps de requête JSON invalide");
+        const teamId = typeof body.team_id === "string" ? body.team_id : "";
+        const date = typeof body.report_date === "string" ? body.report_date : "";
+        if (!validTeamId(teamId) || !reportDate(date)) return jsonError(400, "Équipe ou date invalide");
+        const { data: team, error: teamError } = await loadTeam(teamId);
+        if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
+        if (!team) return jsonError(404, "Équipe introuvable");
+        let reportData: DailyReportData;
+        try {
+          reportData = await buildDailyReportData(teamId, date);
+        } catch (error) {
+          console.error("daily report calculation failed", error);
+          return jsonError(500, "Impossible de calculer le rapport à partir des visites");
+        }
+        const conversionRate = dailyReportConversion(reportData);
+        const { data: snapshotId, error } = await supabase.rpc("create_daily_report_snapshot", {
+          p_team_id: teamId,
+          p_report_date: date,
+          p_report_data: reportData,
+          p_conversion_rate: conversionRate,
+          p_analytical_comment: dailyReportComment(team.name, date, reportData),
+          p_actor_admin_id: session.user_id,
+        });
+        if (error) return dailyReportRpcError(error);
+        const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
+          .select("*")
+          .eq("id", snapshotId)
+          .single();
+        if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été créé mais ne peut pas être relu");
+        return jsonResponse(snapshot, 201);
+      }
+
+      if (path === "/daily-reports/regenerate" && method === "POST") {
+        const body = await readDailyReportBody(req);
+        if (!body) return jsonError(400, "Corps de requête JSON invalide");
+        const teamId = typeof body.team_id === "string" ? body.team_id : "";
+        const date = typeof body.report_date === "string" ? body.report_date : "";
+        const expectedVersion = body.expected_version;
+        if (!validTeamId(teamId) || !reportDate(date) || typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+          return jsonError(400, "Équipe, date ou version attendue invalide");
+        }
+        if (body.confirmed !== true) return jsonError(400, "Confirmation explicite de régénération requise");
+        const { data: team, error: teamError } = await loadTeam(teamId);
+        if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
+        if (!team) return jsonError(404, "Équipe introuvable");
+        let reportData: DailyReportData;
+        try {
+          reportData = await buildDailyReportData(teamId, date);
+        } catch (error) {
+          console.error("daily report recalculation failed", error);
+          return jsonError(500, "Impossible de recalculer le rapport à partir des visites");
+        }
+        const { data: snapshotId, error } = await supabase.rpc("regenerate_daily_report_snapshot", {
+          p_team_id: teamId,
+          p_report_date: date,
+          p_report_data: reportData,
+          p_conversion_rate: dailyReportConversion(reportData),
+          p_analytical_comment: dailyReportComment(team.name, date, reportData),
+          p_actor_admin_id: session.user_id,
+          p_expected_version: expectedVersion,
+          p_confirmed: true,
+        });
+        if (error) return dailyReportRpcError(error);
+        const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
+          .select("*")
+          .eq("id", snapshotId)
+          .single();
+        if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été régénéré mais ne peut pas être relu");
+        return jsonResponse(snapshot);
+      }
+
+      return jsonError(404, "Route de rapports journaliers introuvable");
     }
 
     // A non-super administrator without a team would otherwise bypass every team filter.

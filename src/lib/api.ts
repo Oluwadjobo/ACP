@@ -297,6 +297,45 @@ export const api = {
     return apiRequest<import("@/types").TeamStats>(`/team-stats${suffix}`, { method: "GET" });
   },
 
+  // Super Admin - immutable daily report snapshots
+  listDailyReportTeams: () =>
+    apiRequest<import("@/types").Team[]>("/daily-reports/teams", { method: "GET" }),
+
+  getDailyReportSnapshot: (teamId: string, reportDate: string) => {
+    const qs = new URLSearchParams({ team_id: teamId, report_date: reportDate });
+    return apiRequest<{ snapshot: import("@/types").DailyReportSnapshot | null; audit: import("@/types").DailyReportAuditEntry[] }>(
+      `/daily-reports/snapshot?${qs.toString()}`,
+      { method: "GET" }
+    );
+  },
+
+  compareDailyReports: (teamId: string, dateA: string, dateB: string) => {
+    const qs = new URLSearchParams({ team_id: teamId, date_a: dateA, date_b: dateB });
+    return apiRequest<{
+      team: import("@/types").Team;
+      date_a: { date: string; snapshot: import("@/types").DailyReportSnapshot | null };
+      date_b: { date: string; snapshot: import("@/types").DailyReportSnapshot | null };
+      analytical_comment: string;
+    }>(`/daily-reports/compare?${qs.toString()}`, { method: "GET" });
+  },
+
+  generateDailyReport: (teamId: string, reportDate: string) =>
+    apiRequest<import("@/types").DailyReportSnapshot>("/daily-reports/generate", {
+      method: "POST",
+      body: JSON.stringify({ team_id: teamId, report_date: reportDate }),
+    }),
+
+  regenerateDailyReport: (teamId: string, reportDate: string, expectedVersion: number) =>
+    apiRequest<import("@/types").DailyReportSnapshot>("/daily-reports/regenerate", {
+      method: "POST",
+      body: JSON.stringify({
+        team_id: teamId,
+        report_date: reportDate,
+        expected_version: expectedVersion,
+        confirmed: true,
+      }),
+    }),
+
   listVisites: (page = 1, pageSize = 50, params?: { start_at?: string; end_before?: string }) => {
     const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (params?.start_at) qs.set("start_at", params.start_at);
