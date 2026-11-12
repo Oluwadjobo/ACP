@@ -1,6 +1,6 @@
 import { type ReactNode, useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Leaf, Truck, ClipboardList, BarChart3, ClipboardCheck, Trash2 } from "lucide-react";
+import { LayoutDashboard, Users, Store, LogOut, MapPin, UserCog, Package, Shield, Map as MapIcon, FileText, ChevronDown, Check, Globe, Droplets, Milk, Leaf, Truck, ClipboardList, BarChart3, ClipboardCheck, Trash2, CalendarDays } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Permission, Team } from "@/types";
@@ -20,6 +20,7 @@ const allNavItems: NavItem[] = [
   { path: "/admin/commerciaux", label: "Commerciaux", icon: Users, permission: "manage_commerciaux" },
   { path: "/admin/diagnostic-pos", label: "Diagnostic POS", icon: ClipboardCheck, permission: "manage_points_vente" },
   { path: "/admin/nettoyage-donnees", label: "Nettoyage des données", icon: Trash2, permission: "manage_points_vente", superAdminOnly: true },
+  { path: "/admin/rapports-journaliers", label: "Rapports journaliers", icon: CalendarDays, permission: "view_dashboard", superAdminOnly: true },
   { path: "/admin/superviseurs", label: "Team Leaders", icon: UserCog, permission: "manage_superviseurs" },
   { path: "/admin/agents-livreur", label: "Agents livreur", icon: Truck, permission: "manage_agents_livreur" },
   { path: "/admin/commandes", label: "Commandes", icon: ClipboardList, permission: "view_dashboard" },

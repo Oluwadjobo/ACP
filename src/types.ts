@@ -12,6 +12,61 @@ export interface Team {
   created_at: string;
 }
 
+export interface DailyReportRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  out_of_zone: number;
+  presence_confirmed: number;
+  sale_not_realized: number;
+  sale_realized: number;
+  total: number;
+}
+
+export interface DailyReportTotals {
+  out_of_zone: number;
+  presence_confirmed: number;
+  sale_not_realized: number;
+  sale_realized: number;
+  total: number;
+}
+
+export interface DailyReportData {
+  columns: ["Commercial", "Hors zone", "Présence confirmée", "Vente non réalisée", "Vente réalisée", "Total général"];
+  rows: DailyReportRow[];
+  totals: DailyReportTotals;
+}
+
+export interface DailyReportSnapshot {
+  id: string;
+  team_id: string;
+  team_code: TeamCode;
+  team_name: string;
+  report_date: string;
+  report_data: DailyReportData;
+  out_of_zone_total: number;
+  presence_confirmed_total: number;
+  sale_not_realized_total: number;
+  sale_realized_total: number;
+  total_general: number;
+  conversion_rate: number;
+  analytical_comment: string;
+  version: number;
+  generated_at: string;
+  generated_by: string;
+  generated_by_name: string;
+}
+
+export interface DailyReportAuditEntry {
+  id: string;
+  previous_version: number;
+  replacement_version: number;
+  previous_snapshot: DailyReportSnapshot;
+  replacement_snapshot: DailyReportSnapshot;
+  regenerated_at: string;
+  regenerated_by: string;
+  regenerated_by_name: string;
+}
+
 export type Permission =
   | "scan" | "create_point_vente" | "record_vente" | "create_promesse"
   | "control_terrain" | "view_history" | "view_ventes_non_realisees"
