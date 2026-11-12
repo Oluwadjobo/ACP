@@ -19,6 +19,7 @@ import { AdminCommandes } from "@/pages/admin/AdminCommandes";
 import { AdminTeamStats } from "@/pages/admin/AdminTeamStats";
 import { AdminPosDiagnostics } from "@/pages/admin/AdminPosDiagnostics";
 import { AdminDataCleanup } from "@/pages/admin/AdminDataCleanup";
+import { AdminDailyReports } from "@/pages/admin/AdminDailyReports";
 import { FieldScanner } from "@/pages/commercial/FieldScanner";
 import { FieldHistory } from "@/pages/commercial/FieldHistory";
 import { SuperviseurVentesNonRealisees } from "@/pages/superviseur/SuperviseurVentesNonRealisees";
@@ -113,6 +114,7 @@ function AppRoutes() {
       <Route path="/admin/commerciaux" element={<ProtectedRoute allow="admin" permission="manage_commerciaux"><AdminLayout><AdminCommerciaux /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/diagnostic-pos" element={<ProtectedRoute allow="admin" permission="manage_points_vente"><AdminLayout><AdminPosDiagnostics /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/nettoyage-donnees" element={<ProtectedRoute allow="admin" superAdminOnly><AdminLayout><AdminDataCleanup /></AdminLayout></ProtectedRoute>} />
+      <Route path="/admin/rapports-journaliers" element={<ProtectedRoute allow="admin" superAdminOnly><AdminLayout><AdminDailyReports /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/superviseurs" element={<ProtectedRoute allow="admin" permission="manage_superviseurs"><AdminLayout><AdminSuperviseurs /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/admins" element={<ProtectedRoute allow="admin" permission="manage_admins"><AdminLayout><AdminAdmins /></AdminLayout></ProtectedRoute>} />
       <Route path="/admin/produits" element={<ProtectedRoute allow="admin" permission="manage_produits"><AdminLayout><AdminProduits /></AdminLayout></ProtectedRoute>} />
