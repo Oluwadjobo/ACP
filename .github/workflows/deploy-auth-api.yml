@@ -20,7 +20,7 @@ jobs:
   deploy:
     name: Deploy existing auth-api to ACP Supabase
     runs-on: ubuntu-latest
-    environment: acp-production
+    environment: "production acp"
     timeout-minutes: 15
     if: ${{ github.ref == 'refs/heads/main' && inputs.confirm_deployment == 'DEPLOY-AUTH-API' }}
     steps:
@@ -49,7 +49,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
         with:
-          version: 3.1.0
+          version: latest
 
       - name: Deploy only auth-api
         env:
