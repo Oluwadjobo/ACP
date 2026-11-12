@@ -19,6 +19,7 @@ const DOUBLE_SCAN_MINUTES = 5;
 const MAX_DISTANCE_METERS = 30;
 const MAX_GPS_ACCURACY_METERS = 15;
 const MAX_GEOLOCATION_GPS_ACCURACY_METERS = 30;
+const MAX_GEOLOCATION_DISTANCE_METERS = 50;
 
 const VENTE_NON_REALISEE_MOTIFS = [
   "Rupture de stock",
@@ -486,14 +487,24 @@ async function updateSessionTeam(token: string, teamId: string | null): Promise<
 
 // ============ GEO HELPERS ============
 
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function haversineMetersExact(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000;
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  return Math.round(haversineMetersExact(lat1, lon1, lat2, lon2));
+}
+
+function parseCoordinate(value: unknown, min: number, max: number): number | null {
+  if ((typeof value !== "number" && typeof value !== "string")
+    || (typeof value === "string" && !value.trim())) return null;
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) && coordinate >= min && coordinate <= max ? coordinate : null;
 }
 
 // ============ HIERARCHY HELPERS (tenant-aware) ============
@@ -1908,13 +1919,16 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- PDV GPS REPORTS (administrative review) ---
     if (path === "/pdv-gps-reports" && method === "GET") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
-      let query = supabase.from("pdv_gps_reports")
-        .select("id, point_vente_id, reporter_role, reporter_name, pdv_latitude, pdv_longitude, device_latitude, device_longitude, device_accuracy, distance_meters, status, attempt_count, first_reported_at, last_reported_at, point_vente:points_vente(code, name, address, city, latitude, longitude, active)")
-        .eq("status", "open").order("last_reported_at", { ascending: false }).limit(500);
-      if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error } = await query;
-      if (error) return jsonError(500, "Erreur lors de la lecture des signalements");
-      return jsonResponse(data || []);
+      const reportsResult = await fetchAllRows((from, to) => {
+        let query = supabase.from("pdv_gps_reports")
+          .select("id, point_vente_id, team_id, reporter_id, reporter_role, reporter_name, pdv_latitude, pdv_longitude, device_latitude, device_longitude, device_accuracy, distance_meters, status, attempt_count, first_reported_at, last_reported_at, resolved_at, resolution_note, gps_captured_at, point_vente:points_vente(id, code, name, address, city, latitude, longitude, active)", { count: "exact" })
+          .order("last_reported_at", { ascending: false }).order("id", { ascending: true })
+          .range(from, to);
+        if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+        return query;
+      });
+      if (reportsResult.error) return jsonError(500, "Erreur lors de la lecture des signalements");
+      return jsonResponse(reportsResult.data);
     }
     if (path.startsWith("/pdv-gps-reports/") && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
@@ -2043,17 +2057,22 @@ async function handleRoute(req: Request): Promise<Response> {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
+      const latitudeValue = parseCoordinate(latitude, -90, 90);
+      const longitudeValue = parseCoordinate(longitude, -180, 180);
+      if (latitudeValue === null || longitudeValue === null) {
+        return jsonError(400, "Coordonnées GPS du point de vente invalides");
+      }
       // Anti-duplication: check for probable duplicates before creating
       const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
         p_name: name.trim(), p_team_id: effectiveTeamId,
-        p_latitude: Number(latitude), p_longitude: Number(longitude),
+        p_latitude: latitudeValue, p_longitude: longitudeValue,
       });
       if (dups && dups.length > 0) {
         return jsonError(409, JSON.stringify({ duplicates: dups }));
       }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: latitudeValue, longitude: longitudeValue, qr_token };
       if (secteur_id) insertData.secteur_id = secteur_id;
       if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
@@ -2069,8 +2088,20 @@ async function handleRoute(req: Request): Promise<Response> {
       if (body.name !== undefined) updates.name = body.name.trim();
       if (body.address !== undefined) updates.address = body.address.trim();
       if (body.city !== undefined) updates.city = body.city.trim();
-      if (body.latitude !== undefined) updates.latitude = Number(body.latitude);
-      if (body.longitude !== undefined) updates.longitude = Number(body.longitude);
+      if (body.latitude !== undefined) {
+        const latitude = parseCoordinate(body.latitude, -90, 90);
+        if (latitude === null) {
+          return jsonError(400, "Latitude du point de vente invalide");
+        }
+        updates.latitude = latitude;
+      }
+      if (body.longitude !== undefined) {
+        const longitude = parseCoordinate(body.longitude, -180, 180);
+        if (longitude === null) {
+          return jsonError(400, "Longitude du point de vente invalide");
+        }
+        updates.longitude = longitude;
+      }
       if (body.secteur_id !== undefined) updates.secteur_id = body.secteur_id || null;
       if (body.frigo_comtesse !== undefined) updates.frigo_comtesse = body.frigo_comtesse === null ? null : Boolean(body.frigo_comtesse);
       let query = supabase.from("points_vente").update(updates).eq("id", id);
@@ -2222,11 +2253,22 @@ async function handleRoute(req: Request): Promise<Response> {
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
+      const startAtParam = url.searchParams.get("start_at");
+      const endBeforeParam = url.searchParams.get("end_before");
+      const startAt = startAtParam ? new Date(startAtParam) : null;
+      const endBefore = endBeforeParam ? new Date(endBeforeParam) : null;
+      if ((startAtParam && (!startAt || !Number.isFinite(startAt.getTime())))
+        || (endBeforeParam && (!endBefore || !Number.isFinite(endBefore.getTime())))
+        || (startAt && endBefore && startAt.getTime() >= endBefore.getTime())) {
+        return jsonError(400, "Période d'extraction invalide");
+      }
       let query = supabase
         .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
-          commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
-        .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
+          commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city, address)`, { count: "exact" })
+        .order("visited_at", { ascending: false }).order("id", { ascending: true }).range(offset, offset + pageSize - 1);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      if (startAt) query = query.gte("visited_at", startAt.toISOString());
+      if (endBefore) query = query.lt("visited_at", endBefore.toISOString());
       const { data, error, count } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse({ data, count: count || 0, page, pageSize });
@@ -2714,36 +2756,61 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/pdv-gps-reports" && method === "POST") {
       const denied = requirePermission("scan"); if (denied) return denied;
       if (userRole !== "commercial" && userRole !== "superviseur") return jsonError(403, "Action réservée aux commerciaux et Team Leaders");
-      const { point_vente_id, latitude, longitude, accuracy } = await req.json();
+      const { point_vente_id, latitude, longitude, accuracy, captured_at } = await req.json();
+      const hasLatitude = latitude !== null && latitude !== undefined;
+      const hasLongitude = longitude !== null && longitude !== undefined;
       if (typeof point_vente_id !== "string" || !point_vente_id
-        || typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90
-        || typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180
-        || (accuracy != null && (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0))) {
+        || hasLatitude !== hasLongitude
+        || (hasLatitude && (typeof latitude !== "number" || !Number.isFinite(latitude) || Math.abs(latitude) > 90))
+        || (hasLongitude && (typeof longitude !== "number" || !Number.isFinite(longitude) || Math.abs(longitude) > 180))
+        || (accuracy != null && (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0))
+        || (captured_at != null && (typeof captured_at !== "string" || !Number.isFinite(Date.parse(captured_at))))
+        || (!hasLatitude && (accuracy != null || captured_at != null))) {
         return jsonError(400, "Paramètres GPS invalides");
       }
-      let pvQuery = supabase.from("points_vente").select("id, latitude, longitude, team_id").eq("id", point_vente_id);
-      if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour signaler un point de vente");
+      const pvQuery = supabase.from("points_vente").select("id, latitude, longitude, team_id")
+        .eq("id", point_vente_id).eq("team_id", userTeamId);
       const { data: pv, error: pvError } = await pvQuery.maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
-      const distance = pv.latitude == null || pv.longitude == null
-        ? null : haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
+      const pdvLatitude = parseCoordinate(pv.latitude, -90, 90);
+      const pdvLongitude = parseCoordinate(pv.longitude, -180, 180);
+      const storedPointCoordinatesValid = pdvLatitude !== null && pdvLongitude !== null;
+      const gpsLatitude = typeof latitude === "number" ? latitude : null;
+      const gpsLongitude = typeof longitude === "number" ? longitude : null;
+      const distance = storedPointCoordinatesValid && gpsLatitude !== null && gpsLongitude !== null
+        ? haversineMeters(gpsLatitude, gpsLongitude, pdvLatitude, pdvLongitude)
+        : null;
+      const reportedAt = new Date().toISOString();
       const fields = {
-        pdv_latitude: pv.latitude, pdv_longitude: pv.longitude,
-        device_latitude: latitude, device_longitude: longitude,
+        pdv_latitude: storedPointCoordinatesValid ? pdvLatitude : null,
+        pdv_longitude: storedPointCoordinatesValid ? pdvLongitude : null,
+        device_latitude: gpsLatitude,
+        device_longitude: gpsLongitude,
         device_accuracy: typeof accuracy === "number" ? accuracy : null,
-        distance_meters: distance, last_reported_at: new Date().toISOString(),
+        distance_meters: distance,
+        gps_captured_at: captured_at ? new Date(captured_at).toISOString() : null,
+        last_reported_at: reportedAt,
       };
       const { data: existing, error: existingError } = await supabase.from("pdv_gps_reports")
-        .select("id, attempt_count").eq("point_vente_id", pv.id).eq("reporter_id", userId).eq("status", "open").maybeSingle();
+        .select("id, attempt_count").eq("point_vente_id", pv.id).eq("team_id", userTeamId)
+        .eq("reporter_id", userId).eq("status", "open").maybeSingle();
       if (existingError) return jsonError(500, "Erreur lors de l'enregistrement du signalement");
       if (existing) {
         const attempts = Number(existing.attempt_count) + 1;
-        const { error } = await supabase.from("pdv_gps_reports").update({ ...fields, attempt_count: attempts }).eq("id", existing.id);
+        const { error } = await supabase.from("pdv_gps_reports")
+          .update({ ...fields, attempt_count: attempts }).eq("id", existing.id).eq("team_id", userTeamId);
         if (error) return jsonError(500, "Erreur lors de l'enregistrement du signalement");
         return jsonResponse({ status: "updated", report_id: existing.id, attempt_count: attempts });
       }
       const { data: created, error } = await supabase.from("pdv_gps_reports").insert({
-        ...fields, point_vente_id: pv.id, team_id: pv.team_id, reporter_id: userId, reporter_role: userRole, reporter_name: session.full_name,
+        ...fields,
+        point_vente_id: pv.id,
+        team_id: pv.team_id,
+        reporter_id: userId,
+        reporter_role: userRole,
+        reporter_name: session.full_name,
+        first_reported_at: reportedAt,
       }).select("id").maybeSingle();
       if (error) {
         if (error.code === "23505") return jsonError(409, "Un signalement est déjà ouvert pour ce point de vente");
@@ -2766,6 +2833,9 @@ async function handleRoute(req: Request): Promise<Response> {
       if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
       const { data: pv, error: pvError } = await pvQuery.maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
+      if (parseCoordinate(pv.latitude, -90, 90) === null || parseCoordinate(pv.longitude, -180, 180) === null) {
+        return jsonError(409, "Les coordonnées du point de vente doivent être vérifiées par un administrateur");
+      }
       const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
       const acc = accuracy;
 
@@ -3560,6 +3630,11 @@ async function handleRoute(req: Request): Promise<Response> {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
       const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
       if (!name || !address || !city || latitude == null || longitude == null || !secteur_id) return jsonError(400, "Tous les champs sont requis, y compris la tournée");
+      const latitudeValue = parseCoordinate(latitude, -90, 90);
+      const longitudeValue = parseCoordinate(longitude, -180, 180);
+      if (latitudeValue === null || longitudeValue === null) {
+        return jsonError(400, "Coordonnées GPS du point de vente invalides");
+      }
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
       let assignmentQuery = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, session.user_id).eq("secteur_id", secteur_id);
@@ -3570,14 +3645,14 @@ async function handleRoute(req: Request): Promise<Response> {
       // Anti-duplication: check for probable duplicates before creating
       const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
         p_name: name.trim(), p_team_id: userTeamId,
-        p_latitude: Number(latitude), p_longitude: Number(longitude),
+        p_latitude: latitudeValue, p_longitude: longitudeValue,
       });
       if (dups && dups.length > 0) {
         return jsonError(409, JSON.stringify({ duplicates: dups }));
       }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: latitudeValue, longitude: longitudeValue, qr_token, secteur_id, created_by: userId, created_by_role: userRole };
       if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (userTeamId) insertData.team_id = userTeamId;
       // The QR secret is deliberately left out of the response: a field user never needs it.
@@ -3637,13 +3712,16 @@ async function handleRoute(req: Request): Promise<Response> {
       pvQuery = pvQuery.eq("team_id", userTeamId);
       const { data: pv, error: pvError } = await pvQuery.maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
-      const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
-      const MAX_DISTANCE = 30;
-      if (distance > MAX_DISTANCE) {
+      if (parseCoordinate(pv.latitude, -90, 90) === null || parseCoordinate(pv.longitude, -180, 180) === null) {
+        return jsonError(409, "Les coordonnées du point de vente doivent être vérifiées par un administrateur");
+      }
+      const exactDistance = haversineMetersExact(latitude, longitude, pv.latitude, pv.longitude);
+      const distance = Math.round(exactDistance);
+      if (exactDistance > MAX_GEOLOCATION_DISTANCE_METERS) {
         return jsonResponse({
           status: "out_of_zone",
           distance,
-          message: `Vous êtes à ${distance} m du point de vente. Rapprochez-vous à moins de ${MAX_DISTANCE} m.`,
+          message: `Vous êtes à ${distance} m du point de vente. Rapprochez-vous à moins de ${MAX_GEOLOCATION_DISTANCE_METERS} m.`,
           debug: { userLat: latitude, userLon: longitude, pointName: pv.name },
         });
       }

@@ -13,14 +13,16 @@
 export interface AccuratePosition {
   latitude: number;
   longitude: number;
-  accuracy: number;
+  accuracy: number | null;
+  timestamp: number | null;
 }
 
 const MIN_WARMUP_MS = 3000;
 
 export function getAccuratePosition(
   timeoutMs = 20000,
-  minAccuracy = 15
+  minAccuracy = 15,
+  returnBestOnTimeout = false
 ): Promise<AccuratePosition> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -45,12 +47,15 @@ export function getAccuratePosition(
     watchId = navigator.geolocation.watchPosition(
       (pos) => {
         if (resolved) return;
-        const acc = pos.coords.accuracy ?? 9999;
-        const ts = pos.timestamp;
+        const acc = Number.isFinite(pos.coords.accuracy) && pos.coords.accuracy >= 0
+          ? pos.coords.accuracy
+          : null;
+        const ts = Number.isFinite(pos.timestamp) && pos.timestamp > 0 ? pos.timestamp : null;
         const accuratePos: AccuratePosition = {
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: acc,
+          timestamp: ts,
         };
 
         const elapsed = Date.now() - startTime;
@@ -61,15 +66,19 @@ export function getAccuratePosition(
         // the more recent one — the GPS has likely converged closer to truth.
         if (
           !bestPos ||
-          acc < bestPos.accuracy - 5 ||
-          (Math.abs(acc - bestPos.accuracy) <= 5 && ts > bestTimestamp)
+          (acc !== null && (
+            bestPos.accuracy === null ||
+            acc < bestPos.accuracy - 5 ||
+            (Math.abs(acc - bestPos.accuracy) <= 5 && (ts ?? 0) > bestTimestamp)
+          )) ||
+          (acc === null && bestPos.accuracy === null && (ts ?? 0) > bestTimestamp)
         ) {
           bestPos = accuratePos;
-          bestTimestamp = ts;
+          bestTimestamp = ts ?? 0;
         }
 
         // Only accept a reading after warmup AND when accuracy meets target.
-        if (isWarmedUp && acc <= minAccuracy) {
+        if (isWarmedUp && acc !== null && acc <= minAccuracy) {
           finish(accuratePos);
         }
       },
@@ -86,7 +95,7 @@ export function getAccuratePosition(
 
     // Outer timeout: resolve with the best reading collected so far.
     setTimeout(() => {
-      if (bestPos && bestPos.accuracy <= minAccuracy) {
+      if (bestPos && (returnBestOnTimeout || (bestPos.accuracy !== null && bestPos.accuracy <= minAccuracy))) {
         finish(bestPos);
         return;
       }
@@ -94,7 +103,7 @@ export function getAccuratePosition(
       if (resolved) return;
       resolved = true;
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      const accuracy = bestPos ? Math.round(bestPos.accuracy) : null;
+      const accuracy = bestPos?.accuracy === null || bestPos === null ? null : Math.round(bestPos.accuracy);
       reject(new Error(
         accuracy === null
           ? "Impossible d'obtenir une précision GPS suffisante. Vérifiez que le GPS est activé et réessayez."
@@ -102,4 +111,19 @@ export function getAccuratePosition(
       ));
     }, timeoutMs);
   });
+}
+
+export function haversineMeters(
+  latitude1: number,
+  longitude1: number,
+  latitude2: number,
+  longitude2: number
+): number {
+  const toRadians = (degrees: number) => degrees * Math.PI / 180;
+  const latitudeDelta = toRadians(latitude2 - latitude1);
+  const longitudeDelta = toRadians(longitude2 - longitude1);
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(latitude1)) * Math.cos(toRadians(latitude2))
+    * Math.sin(longitudeDelta / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }

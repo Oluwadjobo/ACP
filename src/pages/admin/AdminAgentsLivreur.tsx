@@ -1,14 +1,12 @@
 import { useState, useEffect } from "react";
-import { Truck, Plus, Trash2, RefreshCw, Loader2, Search, X, Store, UserPlus } from "lucide-react";
+import { Truck, Plus, Trash2, Loader2, UserPlus } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { Modal } from "@/components/Modal";
 import { PermissionsEditor } from "@/components/PermissionsEditor";
 import { Toast } from "@/components/Toast";
 import type { AgentLivreur, Commercial } from "@/types";
 
 export function AdminAgentsLivreur() {
-  const { hasPermission } = useAuth();
   const [agents, setAgents] = useState<AgentLivreur[]>([]);
   const [commerciaux, setCommerciaux] = useState<Commercial[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,7 +194,7 @@ function AgentFormModal({ agent, commerciaux, onClose, onSaved }: {
   };
 
   return (
-    <Modal title={agent ? "Modifier l'agent" : "Créer un agent livreur"} onClose={onClose}>
+    <Modal open={true} title={agent ? "Modifier l'agent" : "Créer un agent livreur"} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <div className="rounded-lg bg-error-50 border border-error-200 px-3 py-2 text-sm text-error-700">{error}</div>}
 

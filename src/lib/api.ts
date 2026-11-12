@@ -215,6 +215,9 @@ export const api = {
     return apiRequest<import("@/types").PointVente[]>(`/points-vente${suffix}`, { method: "GET" });
   },
 
+  listPdvGpsReports: () =>
+    apiRequest<import("@/types").PdvGpsReport[]>("/pdv-gps-reports", { method: "GET" }),
+
   listPointsVenteForDiagnostic: async (commercialId?: string) => {
     const qs = new URLSearchParams({ diagnostic: "true" });
     if (commercialId) qs.set("commercial_id", commercialId);
@@ -294,11 +297,15 @@ export const api = {
     return apiRequest<import("@/types").TeamStats>(`/team-stats${suffix}`, { method: "GET" });
   },
 
-  listVisites: (page = 1, pageSize = 50) =>
-    apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
-      `/visites?page=${page}&pageSize=${pageSize}`,
+  listVisites: (page = 1, pageSize = 50, params?: { start_at?: string; end_before?: string }) => {
+    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (params?.start_at) qs.set("start_at", params.start_at);
+    if (params?.end_before) qs.set("end_before", params.end_before);
+    return apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
+      `/visites?${qs.toString()}`,
       { method: "GET" }
-    ),
+    );
+  },
 
   listPromesses: (page = 1, pageSize = 50) =>
     apiRequest<{ data: import("@/types").PromesseAchat[]; count: number; page: number; pageSize: number }>(
@@ -345,7 +352,7 @@ export const api = {
 
   // Field - Shared
   resolveQr: (qr_token: string) =>
-    apiRequest<{ id: string; name: string; address: string; city: string; latitude: number; longitude: number }>(
+    apiRequest<{ id: string; name: string; address: string; city: string; latitude: number | null; longitude: number | null }>(
       "/resolve-qr",
       { method: "POST", body: JSON.stringify({ qr_token }) }
     ),
@@ -356,14 +363,17 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  reportPdvGps: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy: number | null }) =>
+  reportPdvGps: (body: {
+    point_vente_id: string;
+    latitude: number | null;
+    longitude: number | null;
+    accuracy: number | null;
+    captured_at: string | null;
+  }) =>
     apiRequest<{ status: "created" | "updated"; report_id: string; attempt_count: number }>("/pdv-gps-reports", {
       method: "POST",
       body: JSON.stringify(body),
     }),
-
-  listPdvGpsReports: () =>
-    apiRequest<import("@/types").PdvGpsReport[]>("/pdv-gps-reports"),
 
   resolvePdvGpsReport: (id: string, body: { status: "resolved" | "dismissed"; note?: string }) =>
     apiRequest<{ success: boolean }>(`/pdv-gps-reports/${id}`, {
@@ -382,6 +392,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  reportPdvGpsIssue: (body: {
+    point_vente_id: string;
+    latitude: number | null;
+    longitude: number | null;
+    accuracy: number | null;
+    captured_at: string | null;
+  }) => api.reportPdvGps(body),
 
   finalizeVisit: (body: { visite_id: string; vente_status: string; motif?: string }) =>
     apiRequest<{ success: boolean; visite_id: string; vente_status: string }>("/visites/finalize", {

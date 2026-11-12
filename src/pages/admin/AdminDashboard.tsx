@@ -4,12 +4,58 @@ import { api } from "@/lib/api";
 import type { DashboardStats, Visite, PromesseAchat } from "@/types";
 import { formatDateTime, formatRelative, formatDate, formatTime } from "@/lib/format";
 
+const BUSINESS_TIME_ZONE = "Africa/Porto-Novo";
+const BUSINESS_DATE_FORMATTER = new Intl.DateTimeFormat("en-US-u-ca-gregory-nu-latn", {
+  timeZone: BUSINESS_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function businessMidnightToUtc(dateValue: string): string | null {
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== dateValue) return null;
+
+  const targetUtcMidnight = date.getTime();
+  let candidate = targetUtcMidnight;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const parts = BUSINESS_DATE_FORMATTER.formatToParts(new Date(candidate));
+    const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((item) => item.type === type)?.value);
+    const localDateAsUtc = Date.UTC(
+      part("year"),
+      part("month") - 1,
+      part("day"),
+      part("hour"),
+      part("minute"),
+      part("second"),
+    );
+    const nextCandidate = targetUtcMidnight - (localDateAsUtc - candidate);
+    if (nextCandidate === candidate) return new Date(candidate).toISOString();
+    candidate = nextCandidate;
+  }
+  return new Date(candidate).toISOString();
+}
+
+function nextCalendarDate(dateValue: string): string | null {
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== dateValue) return null;
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 export function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [visites, setVisites] = useState<Visite[]>([]);
   const [promesses, setPromesses] = useState<PromesseAchat[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [exportStartDate, setExportStartDate] = useState("");
+  const [exportEndDate, setExportEndDate] = useState("");
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.getDashboard(), api.listVisites(1, 20), api.listPromesses(1, 10)])
@@ -17,11 +63,30 @@ export function AdminDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
-  const fetchAllVisites = async (): Promise<Visite[]> => {
+  const getExportDateBounds = (): { startAt?: string; endBefore?: string } | null => {
+    if (exportStartDate && exportEndDate && exportStartDate > exportEndDate) {
+      setExportMessage("La date de début ne peut pas être postérieure à la date de fin.");
+      return null;
+    }
+
+    const startAt = exportStartDate ? businessMidnightToUtc(exportStartDate) : null;
+    const dayAfterEnd = exportEndDate ? nextCalendarDate(exportEndDate) : null;
+    const endBefore = dayAfterEnd ? businessMidnightToUtc(dayAfterEnd) : null;
+    if ((exportStartDate && !startAt) || (exportEndDate && !endBefore)) {
+      setExportMessage("Veuillez vérifier les dates sélectionnées.");
+      return null;
+    }
+    return {
+      ...(startAt ? { startAt } : {}),
+      ...(endBefore ? { endBefore } : {}),
+    };
+  };
+
+  const fetchAllVisites = async (startAt?: string, endBefore?: string): Promise<Visite[]> => {
     const all: Visite[] = [];
     let page = 1;
     while (true) {
-      const res = await api.listVisites(page, 200);
+      const res = await api.listVisites(page, 200, { start_at: startAt, end_before: endBefore });
       all.push(...res.data);
       if (all.length >= res.count || res.data.length === 0 || res.data.length < 200) break;
       page++;
@@ -47,45 +112,53 @@ export function AdminDashboard() {
     }
   };
 
-  const exportCSV = async () => {
+  const exportVisits = async (format: "csv" | "excel") => {
+    const dateBounds = getExportDateBounds();
+    if (!dateBounds) return;
     setExporting(true);
+    setExportMessage(null);
     try {
-      const all = await fetchAllVisites();
+      const all = await fetchAllVisites(dateBounds.startAt, dateBounds.endBefore);
+      if (all.length === 0) {
+        setExportMessage("Aucune visite ne correspond à la période sélectionnée.");
+        return;
+      }
+      const periodSuffix = exportStartDate || exportEndDate
+        ? `_${exportStartDate || "debut"}_${exportEndDate || "fin"}`
+        : "";
       const headers = ["Utilisateur", "Rôle", "Point de vente", "Ville", "Adresse", "Date", "Heure", "Latitude", "Longitude", "Distance (m)", "Statut", "Motif"];
-      const escapeCSV = (val: string | number) => { const s = String(val); return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s; };
-      const rows = all.map((v) => [
-        escapeCSV(v.commercial?.full_name || v.superviseur?.full_name || ""),
-        escapeCSV(v.user_role === "superviseur" ? "Team Leader" : "Commercial"),
-        escapeCSV(v.point_vente?.name || ""),
-        escapeCSV(v.point_vente?.city || ""),
-        escapeCSV(v.point_vente?.address || ""),
-        escapeCSV(formatDate(v.visited_at)),
-        escapeCSV(formatTime(v.visited_at)),
-        v.latitude, v.longitude, Math.round(v.distance_meters),
-        escapeCSV(statusLabel(v)),
-        escapeCSV(v.motif || ""),
-      ].join(","));
-      downloadFile("\uFEFF" + headers.join(",") + "\n" + rows.join("\n"), `visites_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8;");
-    } finally { setExporting(false); }
-  };
-
-  const exportExcel = async () => {
-    setExporting(true);
-    try {
-      const all = await fetchAllVisites();
-      const headers = ["Utilisateur", "Rôle", "Point de vente", "Ville", "Adresse", "Date", "Heure", "Latitude", "Longitude", "Distance (m)", "Statut", "Motif"];
-      const escapeXML = (val: string | number) => String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-      const cells = (row: string[]) => row.map((c) => `<Cell><Data ss:Type="String">${escapeXML(c)}</Data></Cell>`).join("");
-      const dataRows = all.map((v) => cells([
-        v.commercial?.full_name || v.superviseur?.full_name || "",
-        v.user_role === "superviseur" ? "Team Leader" : "Commercial",
-        v.point_vente?.name || "", v.point_vente?.city || "", v.point_vente?.address || "",
-        formatDate(v.visited_at), formatTime(v.visited_at),
-        String(v.latitude), String(v.longitude), String(Math.round(v.distance_meters)),
-        statusLabel(v), v.motif || "",
-      ]));
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n<Worksheet ss:Name="Visites">\n<Table>\n<Row>${cells(headers)}</Row>\n${dataRows.map((r) => `<Row>${r}</Row>`).join("\n")}\n</Table>\n</Worksheet>\n</Workbook>`;
-      downloadFile(xml, `visites_${new Date().toISOString().slice(0, 10)}.xls`, "application/vnd.ms-excel;charset=utf-8;");
+      if (format === "csv") {
+        const escapeCSV = (val: string | number) => { const s = String(val); return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s; };
+        const rows = all.map((v) => [
+          escapeCSV(v.commercial?.full_name || v.superviseur?.full_name || ""),
+          escapeCSV(v.user_role === "superviseur" ? "Team Leader" : "Commercial"),
+          escapeCSV(v.point_vente?.name || ""),
+          escapeCSV(v.point_vente?.city || ""),
+          escapeCSV(v.point_vente?.address || ""),
+          escapeCSV(formatDate(v.visited_at)),
+          escapeCSV(formatTime(v.visited_at)),
+          v.latitude, v.longitude, Math.round(v.distance_meters),
+          escapeCSV(statusLabel(v)),
+          escapeCSV(v.motif || ""),
+        ].join(","));
+        downloadFile("\uFEFF" + headers.join(",") + "\n" + rows.join("\n"), `visites${periodSuffix}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv;charset=utf-8;");
+      } else {
+        const escapeXML = (val: string | number) => String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const cells = (row: string[]) => row.map((c) => `<Cell><Data ss:Type="String">${escapeXML(c)}</Data></Cell>`).join("");
+        const dataRows = all.map((v) => cells([
+          v.commercial?.full_name || v.superviseur?.full_name || "",
+          v.user_role === "superviseur" ? "Team Leader" : "Commercial",
+          v.point_vente?.name || "", v.point_vente?.city || "", v.point_vente?.address || "",
+          formatDate(v.visited_at), formatTime(v.visited_at),
+          String(v.latitude), String(v.longitude), String(Math.round(v.distance_meters)),
+          statusLabel(v), v.motif || "",
+        ]));
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n<Worksheet ss:Name="Visites">\n<Table>\n<Row>${cells(headers)}</Row>\n${dataRows.map((r) => `<Row>${r}</Row>`).join("\n")}\n</Table>\n</Worksheet>\n</Workbook>`;
+        downloadFile(xml, `visites${periodSuffix}_${new Date().toISOString().slice(0, 10)}.xls`, "application/vnd.ms-excel;charset=utf-8;");
+      }
+      setExportMessage(`${all.length} visite(s) exportée(s).`);
+    } catch (error) {
+      setExportMessage(error instanceof Error ? error.message : "L'extraction a échoué.");
     } finally { setExporting(false); }
   };
 
@@ -173,15 +246,54 @@ export function AdminDashboard() {
 
       {/* Visits list */}
       <div className="card">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-gray-900">Dernières visites</h2>
-            <span className="badge bg-gray-100 text-gray-600">{visites.length} récentes</span>
+        <div className="px-6 py-4 border-b border-gray-100 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-bold text-gray-900">Dernières visites</h2>
+              <span className="badge bg-gray-100 text-gray-600">{visites.length} récentes</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={exportCSV} disabled={exporting || visites.length === 0} className="btn-secondary text-xs py-2 px-3"><Download size={14} />{exporting ? "Export..." : "CSV"}</button>
-            <button onClick={exportExcel} disabled={exporting || visites.length === 0} className="btn-secondary text-xs py-2 px-3"><FileSpreadsheet size={14} />{exporting ? "Export..." : "Excel"}</button>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-xs text-gray-500 mb-2">Période d'extraction des visites (date de visite)</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs text-gray-600">
+                  <span className="block mb-1">Date de début</span>
+                  <input
+                    type="date"
+                    value={exportStartDate}
+                    max={exportEndDate || undefined}
+                    onChange={(event) => { setExportStartDate(event.target.value); setExportMessage(null); }}
+                    className="input py-2 text-sm"
+                  />
+                </label>
+                <label className="text-xs text-gray-600">
+                  <span className="block mb-1">Date de fin</span>
+                  <input
+                    type="date"
+                    value={exportEndDate}
+                    min={exportStartDate || undefined}
+                    onChange={(event) => { setExportEndDate(event.target.value); setExportMessage(null); }}
+                    className="input py-2 text-sm"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { setExportStartDate(""); setExportEndDate(""); setExportMessage(null); }}
+                  disabled={exporting || (!exportStartDate && !exportEndDate)}
+                  className="btn-ghost text-xs py-2"
+                >
+                  Toutes les dates
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Laissez les deux dates vides pour extraire toutes les visites.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => void exportVisits("csv")} disabled={exporting} className="btn-secondary text-xs py-2 px-3"><Download size={14} />{exporting ? "Export..." : "Extraire CSV"}</button>
+              <button onClick={() => void exportVisits("excel")} disabled={exporting} className="btn-secondary text-xs py-2 px-3"><FileSpreadsheet size={14} />{exporting ? "Export..." : "Extraire Excel"}</button>
+            </div>
           </div>
+          {exportMessage && <p role="status" className={`text-sm ${exportMessage.startsWith("Aucune") || exportMessage.includes("ne peut pas") || exportMessage.includes("échoué") ? "text-warning-700" : "text-gray-600"}`}>{exportMessage}</p>}
         </div>
         {visites.length === 0 ? (
           <div className="px-6 py-16 text-center">

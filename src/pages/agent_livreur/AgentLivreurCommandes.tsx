@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Package, MapPin, User, Clock, CheckCircle2, XCircle, Loader2, Navigation, Store, History } from "lucide-react";
+import { Package, MapPin, User, CheckCircle2, XCircle, Loader2, Navigation, Store, History } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -178,7 +178,7 @@ function ValidateLivraisonModal({ commande, onClose, onDone }: {
   };
 
   return (
-    <Modal title={`Valider - ${commande.code}`} onClose={onClose}>
+    <Modal open={true} title={`Valider - ${commande.code}`} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <div className="rounded-lg bg-error-50 border border-error-200 px-3 py-2 text-sm text-error-700">{error}</div>}
 

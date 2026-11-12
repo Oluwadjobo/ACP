@@ -1,17 +1,24 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, LocateFixed, Navigation, Search } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, Navigation, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
-import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
+import type { VisitResult, Produit, Secteur } from "@/types";
+import { VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { getAccuratePosition } from "@/lib/gps";
+import { getAccuratePosition, haversineMeters, type AccuratePosition } from "@/lib/gps";
 
-type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
+type ScanState = "idle" | "scanning" | "resolving" | "diagnostic" | "result" | "action";
 type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | "promesse_achat" | null;
 
 type VenteLigneForm = { produit_id: string; produit_nom: string; quantite: number; observation: string };
+type DiagnosticPoint = { id: string; name: string; latitude: number | null; longitude: number | null };
+type GpsDiagnostic = {
+  point: DiagnosticPoint;
+  position: AccuratePosition | null;
+  distance: number | null;
+  mode: "qr" | "geolocation";
+};
 
 export function FieldScanner() {
   const { fullName, userType, hasPermission, logout } = useAuth();
@@ -54,8 +61,12 @@ export function FieldScanner() {
   // Geolocation (no camera) state
   const [geoMode, setGeoMode] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [geoNearby, setGeoNearby] = useState<{ id: string; code: string; name: string; address: string; city: string; distance_meters: number }[]>([]);
-  const geoPositionRef = useRef<{ latitude: number; longitude: number; accuracy: number } | null>(null);
+  const [geoNearby, setGeoNearby] = useState<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; distance_meters: number }[]>([]);
+  const [gpsDiagnostic, setGpsDiagnostic] = useState<GpsDiagnostic | null>(null);
+  const [validatingVisit, setValidatingVisit] = useState(false);
+  const [reportingGpsIssue, setReportingGpsIssue] = useState(false);
+  const [gpsIssueReported, setGpsIssueReported] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -111,23 +122,12 @@ export function FieldScanner() {
       if (!qrToken) throw new Error("QR Code invalide");
 
       const point = await api.resolveQr(qrToken);
-      setPointName(point.name);
-      setPointId(point.id);
-
-      setGpsStatus("Récupération de votre position GPS (haute précision)...");
-      const position = await getAccuratePosition(25000, 15);
-
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitResult = await api.recordVisit({ point_vente_id: point.id, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
-
-      setResult(visitResult);
-      setGpsStatus(null);
-      if (visitResult.status === "confirmed") {
-        setState("action");
-        try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
-      } else {
-        setState("result");
-      }
+      await capturePointDiagnostic({
+        id: point.id,
+        name: point.name,
+        latitude: point.latitude,
+        longitude: point.longitude,
+      }, "qr");
     } catch (err) {
       if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
       else if (err instanceof DOMException && err.name === "Timeout") setError("Délai d'attente GPS dépassé. Réessayez à l'extérieur ou vérifiez votre signal.");
@@ -142,34 +142,80 @@ export function FieldScanner() {
     setPostAction(null); setSelectedProduits([]); setQuantite(1); setDatePrev(""); setMontant(""); setResponsable(""); setObservations(""); setMotif(""); setMotifAutre("");
     setVenteLignes([{ produit_id: "", produit_nom: "", quantite: 1, observation: "" }]); setVenteObservation(""); setBlNumero(null);
     setRetrying(false);
-    setGeoMode(false); setGeoNearby([]); geoPositionRef.current = null;
+    setGeoMode(false); setGeoNearby([]); setGpsDiagnostic(null); setGpsIssueReported(false);
+  };
+
+  const capturePointDiagnostic = async (point: DiagnosticPoint, mode: GpsDiagnostic["mode"]) => {
+    setPointName(point.name);
+    setPointId(point.id);
+    setGeoMode(mode === "geolocation");
+    setGpsDiagnostic({ point, position: null, distance: null, mode });
+    setError(null);
+    setGpsStatus("Acquisition GPS en cours...");
+    try {
+      const position = await getAccuratePosition(25000, mode === "qr" ? 15 : 30, true);
+      const pointLatitude = point.latitude;
+      const pointLongitude = point.longitude;
+      const pointCoordinatesValid = typeof pointLatitude === "number" && typeof pointLongitude === "number"
+        && Number.isFinite(pointLatitude) && Math.abs(pointLatitude) <= 90
+        && Number.isFinite(pointLongitude) && Math.abs(pointLongitude) <= 180;
+      const distance = pointCoordinatesValid
+        ? haversineMeters(position.latitude, position.longitude, pointLatitude, pointLongitude)
+        : null;
+      setGpsDiagnostic({ point, position, distance, mode });
+      setState("diagnostic");
+    } catch (err) {
+      setGpsDiagnostic({ point, position: null, distance: null, mode });
+      setError(err instanceof Error ? err.message : "Impossible d'obtenir votre position GPS");
+      setState("diagnostic");
+    } finally {
+      setGpsStatus(null);
+    }
   };
 
   const retryGps = async () => {
-    if (!pointId) return;
+    if (!gpsDiagnostic) return;
     setRetrying(true);
-    setError(null);
-    setGpsStatus("Nouvelle tentative GPS (haute précision)...");
     try {
-      const position = await getAccuratePosition(25000, geoMode ? 25 : 15);
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitData = { point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy };
-      const visitResult = geoMode ? await api.geolocVisit(visitData) : await api.recordVisit(visitData);
+      await capturePointDiagnostic(gpsDiagnostic.point, gpsDiagnostic.mode);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const validateDiagnosticVisit = async () => {
+    if (!gpsDiagnostic?.position) {
+      setError("Position GPS indisponible. Actualisez la position avant de valider.");
+      return;
+    }
+    if (gpsDiagnostic.position.accuracy === null) {
+      setError("Précision GPS indisponible. Actualisez la position avant de valider.");
+      return;
+    }
+    setValidatingVisit(true);
+    setError(null);
+    try {
+      const visitData = {
+        point_vente_id: gpsDiagnostic.point.id,
+        latitude: gpsDiagnostic.position.latitude,
+        longitude: gpsDiagnostic.position.longitude,
+        accuracy: gpsDiagnostic.position.accuracy,
+      };
+      const visitResult = gpsDiagnostic.mode === "geolocation"
+        ? await api.geolocVisit(visitData)
+        : await api.recordVisit(visitData);
       setResult(visitResult);
-      setGpsStatus(null);
+      setState("result");
       if (visitResult.status === "confirmed") {
         setState("action");
-        if (!geoMode) {
+        if (gpsDiagnostic.mode === "qr") {
           try { const prods = await api.listProduits(); setProduits(prods); } catch { /* ignore */ }
         }
       }
     } catch (err) {
-      if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
-      else if (err instanceof TypeError) setError("Erreur réseau. Vérifiez votre connexion et réessayez.");
-      else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
+      setError(err instanceof TypeError ? "Erreur réseau. Vérifiez votre connexion et réessayez." : err instanceof Error ? err.message : "Erreur lors de la validation");
     } finally {
-      setRetrying(false);
-      setGpsStatus(null);
+      setValidatingVisit(false);
     }
   };
 
@@ -179,8 +225,7 @@ export function FieldScanner() {
     setGeoLoading(true);
     setGeoNearby([]);
     try {
-      const position = await getAccuratePosition(25000, 25);
-      geoPositionRef.current = position;
+      const position = await getAccuratePosition(25000, 30, true);
       const nearby = await api.geolocNearby({ latitude: position.latitude, longitude: position.longitude, radius: 1000 });
       setGeoNearby(nearby);
       if (nearby.length === 0) {
@@ -193,35 +238,48 @@ export function FieldScanner() {
     }
   };
 
-  const selectGeolocPoint = async (pointId: string) => {
-    setError(null);
-    setGpsStatus("Récupération de votre position GPS (haute précision)...");
+  const selectGeolocPoint = async (selectedPointId: string) => {
+    const selectedPoint = geoNearby.find((point) => point.id === selectedPointId);
+    if (!selectedPoint) {
+      setError("Le point de vente sélectionné n'est plus disponible. Relancez la recherche.");
+      return;
+    }
     setState("resolving");
+    await capturePointDiagnostic({
+      id: selectedPoint.id,
+      name: selectedPoint.name,
+      latitude: selectedPoint.latitude,
+      longitude: selectedPoint.longitude,
+    }, "geolocation");
+  };
+
+  const reportGpsIssue = async () => {
+    if (!gpsDiagnostic || reportingGpsIssue || gpsIssueReported || userType !== "commercial") return;
+    setReportingGpsIssue(true);
+    setError(null);
     try {
-      const position = geoPositionRef.current ?? await getAccuratePosition(25000, 25);
-      setGpsStatus(`Position obtenue (précision ±${Math.round(position.accuracy)} m)...`);
-      const visitResult = await api.geolocVisit({ point_vente_id: pointId, latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracy });
-      const selectedPoint = geoNearby.find((p) => p.id === pointId);
-      setPointName(selectedPoint?.name || visitResult.pointName || null);
-      setPointId(pointId);
-      setResult(visitResult);
-      setGpsStatus(null);
-      if (visitResult.status === "confirmed") {
-        setState("action");
-      } else {
-        setState("result");
-      }
+      const position = gpsDiagnostic.position;
+      await api.reportPdvGpsIssue({
+        point_vente_id: gpsDiagnostic.point.id,
+        latitude: position?.latitude ?? null,
+        longitude: position?.longitude ?? null,
+        accuracy: position?.accuracy ?? null,
+        captured_at: position?.timestamp ? new Date(position.timestamp).toISOString() : null,
+      });
+      setGpsIssueReported(true);
     } catch (err) {
-      if (err instanceof GeolocationPositionError || (err instanceof DOMException && err.name === "NotAllowedError")) setError("Accès à la position refusé. Autorisez le GPS pour valider votre présence.");
-      else if (err instanceof TypeError) setError("Erreur réseau. Vérifiez votre connexion et réessayez.");
-      else setError(err instanceof Error ? err.message : "Erreur lors de la validation");
-      setState("idle");
+      setError(err instanceof Error ? err.message : "Impossible d'enregistrer le signalement GPS");
     } finally {
-      setGpsStatus(null);
+      setReportingGpsIssue(false);
     }
   };
 
   useEffect(() => { return () => stopCamera(); }, [stopCamera]);
+  useEffect(() => {
+    if (state !== "diagnostic") return;
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [state]);
 
   const handlePostAction = async () => {
     if (!postAction || !result?.visit?.id || !pointId || submittingRef.current) return;
@@ -255,7 +313,7 @@ export function FieldScanner() {
           visite_id: result.visit.id,
           point_vente_id: pointId,
           lignes: validLignes.map((l) => ({ produit_id: l.produit_id, produit_nom: l.produit_nom, quantite: l.quantite, observation: l.observation || undefined })),
-          livraison_immédiate: postAction === "vente_livraison",
+          livraison_immediate: postAction === "vente_livraison",
           observation: venteObservation || undefined,
         });
         if (res.bl_numero) setBlNumero(res.bl_numero);
@@ -270,13 +328,36 @@ export function FieldScanner() {
     }
   };
 
-  const homePath = isSuperviseur ? "/superviseur" : "/commercial";
   const historyPath = isSuperviseur ? "/superviseur/historique" : "/commercial/historique";
   const tourneesPath = isSuperviseur ? "/superviseur/tournees" : "/commercial/tournees";
   const pointsPath = isSuperviseur ? "/superviseur/points-vente" : "/commercial/points-vente";
-  const ventesNonRealiseesPath = "/superviseur/ventes-non-realisees";
   const controleTerrainPath = "/superviseur/controle-terrain";
   const roleLabel = isSuperviseur ? "Team Leader" : "Commercial";
+  const diagnosticPosition = gpsDiagnostic?.position ?? null;
+  const diagnosticAccuracyLimit = gpsDiagnostic?.mode === "geolocation" ? 30 : 15;
+  const diagnosticPointCoordinatesValid = gpsDiagnostic?.point.latitude !== null
+    && gpsDiagnostic?.point.latitude !== undefined
+    && gpsDiagnostic?.point.longitude !== null
+    && gpsDiagnostic?.point.longitude !== undefined
+    && Number.isFinite(gpsDiagnostic.point.latitude) && Math.abs(gpsDiagnostic.point.latitude) <= 90
+    && Number.isFinite(gpsDiagnostic.point.longitude) && Math.abs(gpsDiagnostic.point.longitude) <= 180;
+  const diagnosticConclusion = !diagnosticPosition
+    ? "Position GPS indisponible"
+    : diagnosticPosition.accuracy === null
+      ? "Précision GPS indisponible"
+      : diagnosticPosition.accuracy > diagnosticAccuracyLimit
+        ? "GPS imprécis"
+        : !diagnosticPointCoordinatesValid
+          ? "Coordonnées du PDV à vérifier"
+          : (gpsDiagnostic?.distance ?? 0) > 30
+            ? "GPS précis, distance importante à vérifier"
+            : "GPS précis, distance compatible";
+  const diagnosticGpsTime = diagnosticPosition?.timestamp
+    ? new Date(diagnosticPosition.timestamp).toLocaleString("fr-FR")
+    : "Non disponible";
+  const diagnosticGpsAgeSeconds = diagnosticPosition?.timestamp
+    ? Math.max(0, Math.floor((currentTime - diagnosticPosition.timestamp) / 1000))
+    : null;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -370,7 +451,14 @@ export function FieldScanner() {
           </div>
         )}
 
-        {(state === "scanning" || state === "resolving") && (
+        {state === "resolving" && geoMode && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Loader2 size={30} className="animate-spin text-primary-500 mb-3" />
+            <p className="text-sm text-gray-600">{gpsStatus || "Préparation du diagnostic GPS..."}</p>
+          </div>
+        )}
+
+        {(state === "scanning" || (state === "resolving" && !geoMode)) && (
           <div className="w-full max-w-sm animate-fade-in">
             <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-primary-950 shadow-lg">
               <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" playsInline muted />
@@ -396,6 +484,88 @@ export function FieldScanner() {
               <><p className="text-center text-gray-500 text-sm mt-4">Visez le QR code du point de vente...</p>
               <button onClick={() => { stopCamera(); setState("idle"); }} className="btn-secondary w-full mt-4">Annuler</button></>
             )}
+          </div>
+        )}
+
+        {state === "diagnostic" && gpsDiagnostic && (
+          <div className="w-full max-w-sm animate-fade-in space-y-4">
+            <section className="card p-4 space-y-3">
+              <div>
+                <h1 className="text-lg font-bold text-gray-900">Diagnostic GPS avant validation</h1>
+                <p className="text-sm font-semibold text-primary-700">{gpsDiagnostic.point.name}</p>
+                <p className="text-xs text-gray-500">ID du PDV : <span className="font-mono">{gpsDiagnostic.point.id}</span></p>
+              </div>
+              <div className="space-y-2 border-t border-gray-100 pt-3 text-sm">
+                <div>
+                  <p className="text-xs text-gray-500">Position GPS enregistrée du PDV</p>
+                  <p className="font-mono text-gray-900">{diagnosticPointCoordinatesValid
+                    ? `${gpsDiagnostic.point.latitude!.toFixed(6)}, ${gpsDiagnostic.point.longitude!.toFixed(6)}`
+                    : "Absente ou invalide"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Position GPS actuelle du commercial</p>
+                  <p className="font-mono text-gray-900">{diagnosticPosition
+                    ? `${diagnosticPosition.latitude.toFixed(6)}, ${diagnosticPosition.longitude.toFixed(6)}`
+                    : "Indisponible"}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs text-gray-500">Précision navigateur</p>
+                    <p className="font-semibold text-gray-900">{diagnosticPosition?.accuracy == null
+                      ? "Indisponible"
+                      : `±${Math.round(diagnosticPosition.accuracy)} m`}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Distance calculée</p>
+                    <p className="font-semibold text-gray-900">{gpsDiagnostic.distance === null
+                      ? "Indisponible"
+                      : `${Math.round(gpsDiagnostic.distance)} m`}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Heure de la dernière acquisition GPS</p>
+                  <p className="text-gray-900">{diagnosticGpsTime}{diagnosticGpsAgeSeconds !== null && ` (${diagnosticGpsAgeSeconds} s)`}</p>
+                  {diagnosticGpsAgeSeconds !== null && diagnosticGpsAgeSeconds > 60 && (
+                    <p className="text-xs text-warning-700">Cette position date de plus d'une minute ; actualisez-la avant validation.</p>
+                  )}
+                </div>
+              </div>
+              <div role="status" className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                diagnosticConclusion === "GPS précis, distance compatible"
+                  ? "bg-success-50 text-success-700"
+                  : diagnosticConclusion.startsWith("GPS précis")
+                    ? "bg-warning-50 text-warning-700"
+                    : "bg-error-50 text-error-700"
+              }`}>
+                {diagnosticConclusion}
+              </div>
+              <p className="text-xs text-gray-500">
+                Seuils backend inchangés : précision maximale {diagnosticAccuracyLimit} m et distance maximale 30 m.
+                Un écart important nécessite une vérification ; il ne prouve pas à lui seul que le PDV est mal positionné.
+              </p>
+            </section>
+
+            {error && <div role="alert" className="rounded-xl bg-error-50 border border-error-200 px-4 py-2 text-sm text-error-700">{error}</div>}
+            {gpsStatus && <p className="text-center text-sm text-gray-500">{gpsStatus}</p>}
+            <button onClick={retryGps} disabled={retrying || validatingVisit || reportingGpsIssue} className="btn-secondary w-full">
+              {retrying ? <><Loader2 size={18} className="animate-spin" /> Actualisation GPS...</> : <><RefreshCw size={18} /> Réactualiser la position GPS</>}
+            </button>
+            <button onClick={validateDiagnosticVisit} disabled={validatingVisit || retrying || reportingGpsIssue || !diagnosticPosition || diagnosticPosition.accuracy === null} className="btn-primary w-full">
+              {validatingVisit ? <><Loader2 size={18} className="animate-spin" /> Validation...</> : <><MapPin size={18} /> Valider ma présence</>}
+            </button>
+            {userType === "commercial" && (
+              <>
+                <button onClick={reportGpsIssue} disabled={reportingGpsIssue || gpsIssueReported || validatingVisit || retrying} className="btn-secondary w-full">
+                  {reportingGpsIssue
+                    ? <><Loader2 size={18} className="animate-spin" /> Envoi du signalement...</>
+                    : gpsIssueReported
+                      ? <><CheckCircle2 size={18} /> Signalement transmis</>
+                      : <><AlertTriangle size={18} /> Signaler un problème de géolocalisation</>}
+                </button>
+                <p className="text-center text-xs text-gray-500">Le signalement ne modifie pas les coordonnées officielles du PDV.</p>
+              </>
+            )}
+            <button onClick={reset} disabled={validatingVisit || reportingGpsIssue} className="btn-ghost w-full">Annuler</button>
           </div>
         )}
 

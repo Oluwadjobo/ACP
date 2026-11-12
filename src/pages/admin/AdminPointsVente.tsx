@@ -1,9 +1,9 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import QRCode from "qrcode";
 import jsPDF from "jspdf";
-import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation, Calendar, User, Filter, X, AlertTriangle, Archive, Power } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, QrCode, MapPin, Store, Download, Navigation, Calendar, User, Filter, X, AlertTriangle, Archive, Power, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
-import type { PointVente, Secteur, Commercial, Superviseur } from "@/types";
+import type { PointVente, Secteur, Commercial, Superviseur, PdvGpsReport } from "@/types";
 import { Modal } from "@/components/Modal";
 import { getAccuratePosition } from "@/lib/gps";
 import { useAuth } from "@/lib/auth";
@@ -16,6 +16,13 @@ interface DuplicateMatch {
   city: string;
   active: boolean;
   match_type: string;
+}
+
+function parseCoordinateInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(trimmed)) return null;
+  const parsed = Number(trimmed.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export function AdminPointsVente() {
@@ -39,6 +46,10 @@ export function AdminPointsVente() {
   const [deleteTarget, setDeleteTarget] = useState<PointVente | null>(null);
   const [bulkAction, setBulkAction] = useState<"delete" | "deactivate" | "activate" | null>(null);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [gpsReports, setGpsReports] = useState<PdvGpsReport[]>([]);
+  const [gpsReportsLoading, setGpsReportsLoading] = useState(false);
+  const [gpsReportsError, setGpsReportsError] = useState<string | null>(null);
+  const [processingGpsReportId, setProcessingGpsReportId] = useState<string | null>(null);
 
   const showToast = (type: "success" | "error", msg: string) => {
     setToast({ type, msg });
@@ -62,7 +73,35 @@ export function AdminPointsVente() {
       .finally(() => setLoading(false));
   };
 
+  const loadGpsReports = useCallback(async () => {
+    setGpsReportsLoading(true);
+    setGpsReportsError(null);
+    try {
+      setGpsReports(await api.listPdvGpsReports());
+    } catch (error) {
+      setGpsReportsError(error instanceof Error ? error.message : "Impossible de charger les signalements GPS");
+    } finally {
+      setGpsReportsLoading(false);
+    }
+  }, []);
+
+  const updateGpsReportStatus = async (report: PdvGpsReport, status: "resolved" | "dismissed") => {
+    const action = status === "resolved" ? "marquer ce signalement comme vérifié" : "écarter ce signalement";
+    if (!window.confirm(`Voulez-vous ${action} ?`)) return;
+    setProcessingGpsReportId(report.id);
+    try {
+      await api.resolvePdvGpsReport(report.id, { status });
+      showToast("success", status === "resolved" ? "Signalement marqué comme vérifié" : "Signalement écarté");
+      await loadGpsReports();
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Impossible de traiter le signalement GPS");
+    } finally {
+      setProcessingGpsReportId(null);
+    }
+  };
+
   useEffect(() => { load(filterCommercial); }, [filterCommercial]);
+  useEffect(() => { void loadGpsReports(); }, [loadGpsReports]);
 
   // Build a lookup from secteur_id to commercial name and superviseur name
   const secteurToCommercial: Record<string, string> = {};
@@ -157,6 +196,12 @@ export function AdminPointsVente() {
   };
 
   const selectedPoints = filtered.filter((p) => selected.has(p.id));
+  const gpsReportsByPoint = new Map<string, PdvGpsReport[]>();
+  for (const report of gpsReports) {
+    const reports = gpsReportsByPoint.get(report.point_vente_id) || [];
+    reports.push(report);
+    gpsReportsByPoint.set(report.point_vente_id, reports);
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -184,6 +229,131 @@ export function AdminPointsVente() {
           </button>
         </div>
       </div>
+
+      <section className="card overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-bold text-gray-900">Signalements d'incohérence GPS</h2>
+            <p className="text-xs text-gray-500">
+              {gpsReports.reduce((total, report) => total + report.attempt_count, 0)} tentative(s) dans {gpsReports.length} dossier(s), pour {gpsReportsByPoint.size} PDV
+            </p>
+          </div>
+          <button onClick={() => void loadGpsReports()} disabled={gpsReportsLoading} className="btn-secondary text-sm">
+            <RefreshCw size={15} className={gpsReportsLoading ? "animate-spin" : ""} />
+            Actualiser
+          </button>
+        </div>
+        {gpsReportsError && (
+          <p role="alert" className="m-4 rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-sm text-error-700">{gpsReportsError}</p>
+        )}
+        {gpsReportsLoading && gpsReports.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-gray-500">Chargement des signalements…</p>
+        ) : gpsReportsByPoint.size === 0 ? (
+          <p className="px-5 py-6 text-sm text-gray-500">Aucun signalement GPS pour cette équipe.</p>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {[...gpsReportsByPoint.entries()].map(([pointId, reports]) => {
+              const latest = reports[0];
+              const point = latest.point_vente;
+              const editablePoint = points.find((candidate) => candidate.id === pointId);
+              return (
+                <div key={pointId} className="p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{point?.name || "PDV introuvable"} <span className="text-xs font-normal text-gray-500">({point?.code || pointId})</span></h3>
+                      <p className="text-xs text-gray-500">{point?.address || ""}{point?.city ? `, ${point.city}` : ""}</p>
+                      <p className="mt-1 text-xs text-gray-600">
+                        Coordonnées actuelles : {point && point.latitude != null && point.longitude != null
+                          ? `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`
+                          : "Non disponibles"}
+                        {" · "}{reports.length} dossier(s), {reports.reduce((total, report) => total + report.attempt_count, 0)} tentative(s)
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (!editablePoint) {
+                          showToast("error", "Retirez le filtre commercial pour ouvrir ce PDV.");
+                          return;
+                        }
+                        setEditing(editablePoint);
+                        setModalOpen(true);
+                      }}
+                      disabled={!editablePoint}
+                      className="btn-secondary text-xs"
+                      title="La correction nécessite une vérification manuelle"
+                    >
+                      <Pencil size={14} /> Vérifier / modifier manuellement
+                    </button>
+                  </div>
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="min-w-full text-left text-xs">
+                      <thead className="text-gray-500">
+                        <tr>
+                          {["Dernier signalement · déclarant", "Coordonnées PDV au signalement", "GPS relevé", "Précision · distance", "Acquisition GPS", "État · tentatives"].map((header) => (
+                            <th key={header} className="whitespace-nowrap px-2 py-2 font-semibold">{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {reports.map((report) => (
+                          <tr key={report.id} className="text-gray-700">
+                            <td className="whitespace-nowrap px-2 py-2">
+                              {new Date(report.last_reported_at).toLocaleString("fr-FR")}
+                              <span className="block text-gray-500">{report.reporter_name || report.reporter_id} ({report.reporter_role})</span>
+                              {report.attempt_count > 1 && <span className="block text-gray-500">{report.attempt_count} tentatives depuis le {new Date(report.first_reported_at).toLocaleString("fr-FR")}</span>}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 font-mono">
+                              {report.pdv_latitude == null || report.pdv_longitude == null
+                                ? "Non disponible"
+                                : `${report.pdv_latitude.toFixed(6)}, ${report.pdv_longitude.toFixed(6)}`}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 font-mono">
+                              {report.device_latitude == null || report.device_longitude == null
+                                ? "Non disponible"
+                                : `${report.device_latitude.toFixed(6)}, ${report.device_longitude.toFixed(6)}`}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2">
+                              {report.device_accuracy == null ? "Précision indisponible" : `±${Math.round(report.device_accuracy)} m`}
+                              <span className="block">{report.distance_meters == null ? "Distance indisponible" : `${Math.round(report.distance_meters)} m`}</span>
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2">{report.gps_captured_at ? new Date(report.gps_captured_at).toLocaleString("fr-FR") : "Non disponible"}</td>
+                            <td className="whitespace-nowrap px-2 py-2">
+                              <span className="block">{report.status === "open" ? "À vérifier" : report.status === "resolved" ? "Vérifié" : "Écarté"}</span>
+                              {report.status === "open" && (
+                                <span className="mt-1 flex gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={processingGpsReportId === report.id}
+                                    onClick={() => void updateGpsReportStatus(report, "resolved")}
+                                    className="text-accent-700 hover:underline disabled:opacity-50"
+                                  >
+                                    Vérifié
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={processingGpsReportId === report.id}
+                                    onClick={() => void updateGpsReportStatus(report, "dismissed")}
+                                    className="text-gray-500 hover:underline disabled:opacity-50"
+                                  >
+                                    Écarter
+                                  </button>
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className="border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
+          Les signalements servent à l'investigation uniquement : aucune coordonnée officielle n'est modifiée automatiquement.
+        </p>
+      </section>
 
       {/* Search + filter toggle */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -440,6 +610,7 @@ function PointVenteModal({
     showToast("success", "GPS en cours : restez immobile jusqu'à 20 s pour une précision optimale");
     try {
       const pos = await getAccuratePosition(20000, 10);
+      if (pos.accuracy === null) throw new Error("La précision GPS n'a pas été fournie par le navigateur");
       setLatitude(pos.latitude.toFixed(6));
       setLongitude(pos.longitude.toFixed(6));
       showToast("success", `Position captée (précision ±${Math.round(pos.accuracy)} m)`);
@@ -452,13 +623,13 @@ function PointVenteModal({
 
   const checkDuplicates = async (): Promise<boolean> => {
     if (editing || !name.trim()) return false;
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
+    const lat = parseCoordinateInput(latitude);
+    const lng = parseCoordinateInput(longitude);
     try {
       const result = await api.checkPointVenteDuplicates({
         name: name.trim(),
-        latitude: isNaN(lat) ? undefined : lat,
-        longitude: isNaN(lng) ? undefined : lng,
+        latitude: lat !== null && lat >= -90 && lat <= 90 ? lat : undefined,
+        longitude: lng !== null && lng >= -180 && lng <= 180 ? lng : undefined,
       });
       if (result.duplicates.length > 0) {
         setDuplicates(result.duplicates);
@@ -473,10 +644,10 @@ function PointVenteModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!secteurId) { showToast("error", "Veuillez sélectionner une tournée"); return; }
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
-    if (isNaN(lat) || lat < -90 || lat > 90) { showToast("error", "Latitude invalide"); return; }
-    if (isNaN(lng) || lng < -180 || lng > 180) { showToast("error", "Longitude invalide"); return; }
+    const lat = parseCoordinateInput(latitude);
+    const lng = parseCoordinateInput(longitude);
+    if (lat === null || lat < -90 || lat > 90) { showToast("error", "Latitude invalide"); return; }
+    if (lng === null || lng < -180 || lng > 180) { showToast("error", "Longitude invalide"); return; }
 
     // Check for duplicates before creating (only for new POS, and if not already forced)
     if (!editing && !forceCreate) {
@@ -594,13 +765,14 @@ function PointVenteModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">Latitude</label>
-            <input className="input" value={latitude} onChange={(e) => { setLatitude(e.target.value); setCheckedDup(false); }} required placeholder="48.8566" />
+            <input className="input" inputMode="decimal" value={latitude} onChange={(e) => { setLatitude(e.target.value); setCheckedDup(false); }} required placeholder="48.8566" />
           </div>
           <div>
             <label className="label">Longitude</label>
-            <input className="input" value={longitude} onChange={(e) => { setLongitude(e.target.value); setCheckedDup(false); }} required placeholder="2.3522" />
+            <input className="input" inputMode="decimal" value={longitude} onChange={(e) => { setLongitude(e.target.value); setCheckedDup(false); }} required placeholder="2.3522" />
           </div>
         </div>
+        <p className="text-xs text-gray-500">Les coordonnées peuvent utiliser un point ou une virgule comme séparateur décimal.</p>
         <button type="button" onClick={useMyGps} disabled={gettingGps} className="btn-secondary w-full text-xs py-2">
           <MapPin size={14} />
           {gettingGps ? "Localisation en cours..." : "Utiliser ma position GPS actuelle"}

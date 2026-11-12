@@ -220,6 +220,38 @@ export interface PointVente {
   updated_at?: string;
 }
 
+export interface PdvGpsReport {
+  id: string;
+  point_vente_id: string;
+  team_id: string | null;
+  reporter_id: string;
+  reporter_role: "commercial" | "superviseur";
+  reporter_name: string | null;
+  pdv_latitude: number | null;
+  pdv_longitude: number | null;
+  device_latitude: number | null;
+  device_longitude: number | null;
+  device_accuracy: number | null;
+  distance_meters: number | null;
+  status: "open" | "resolved" | "dismissed";
+  attempt_count: number;
+  first_reported_at: string;
+  last_reported_at: string;
+  resolved_at: string | null;
+  resolution_note: string | null;
+  gps_captured_at: string | null;
+  point_vente?: {
+    id?: string;
+    code: string;
+    name: string;
+    address: string;
+    city: string;
+    latitude: number | null;
+    longitude: number | null;
+    active?: boolean | null;
+  } | null;
+}
+
 export interface PosListPagination {
   recordsReceived: number;
   reportedTotal: number;
