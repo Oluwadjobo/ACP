@@ -1,6 +1,6 @@
 import {
   isVisitOutOfZone,
-  isBlockingDuplicateVisit,
+  getExistingVisitDecision,
   type DuplicateVisitCandidate,
   shouldDeduplicateOutOfZoneAttempt,
   type OutOfZoneVisitAttempt,
@@ -75,8 +75,11 @@ Deno.test("does not deduplicate when the previous GPS accuracy is unavailable", 
 
 function existingVisit(overrides: Partial<DuplicateVisitCandidate> = {}): DuplicateVisitCandidate {
   return {
+    id: "visit-1",
     status: "confirmed",
     visited_at: "2026-11-13T23:40:00.000Z",
+    distance_meters: 42,
+    accuracy: 8,
     visit_method: "qr",
     vente_status: "confirmed",
     ...overrides,
@@ -85,35 +88,47 @@ function existingVisit(overrides: Partial<DuplicateVisitCandidate> = {}): Duplic
 
 const duplicateCutoff = Date.parse("2026-11-13T23:35:00.000Z");
 
-Deno.test("a confirmed QR visit blocks another QR validation", () => {
-  assertEquals(isBlockingDuplicateVisit(existingVisit(), "qr", duplicateCutoff), true, "confirmed QR visit blocks QR");
+Deno.test("a pending QR visit resumes through QR with the same visit id", () => {
+  const decision = getExistingVisitDecision(existingVisit(), "qr", duplicateCutoff);
+  assertEquals(decision?.status, "resume", "same-path pending QR visit can be resumed");
+  assertEquals(decision?.visit.id, "visit-1", "resume preserves the existing visit id");
 });
 
-Deno.test("a confirmed geolocation visit blocks a QR validation", () => {
-  assertEquals(isBlockingDuplicateVisit(existingVisit({ visit_method: "geolocation" }), "qr", duplicateCutoff), true, "geolocation blocks QR");
+Deno.test("a pending geolocation visit resumes through geolocation with the same visit id", () => {
+  const decision = getExistingVisitDecision(existingVisit({ visit_method: "geolocation" }), "geolocation", duplicateCutoff);
+  assertEquals(decision?.status, "resume", "same-path pending geolocation visit can be resumed");
+  assertEquals(decision?.visit.id, "visit-1", "resume preserves the existing visit id");
 });
 
-Deno.test("a confirmed QR visit blocks a geolocation validation", () => {
-  assertEquals(isBlockingDuplicateVisit(existingVisit(), "geolocation", duplicateCutoff), true, "QR blocks geolocation");
+Deno.test("a pending QR visit blocks geolocation and directs the user to QR", () => {
+  const decision = getExistingVisitDecision(existingVisit(), "geolocation", duplicateCutoff);
+  assertEquals(decision?.status, "duplicate", "other path cannot resume a pending QR visit");
+  assertEquals(decision?.status === "duplicate" && decision.message.includes("parcours QR"), true, "message identifies QR as the path to resume");
 });
 
-Deno.test("a confirmed geolocation visit blocks another geolocation validation", () => {
-  assertEquals(isBlockingDuplicateVisit(existingVisit({ visit_method: "geolocation" }), "geolocation", duplicateCutoff), true, "geolocation blocks geolocation");
+Deno.test("a pending geolocation visit blocks QR and directs the user to geolocation", () => {
+  const decision = getExistingVisitDecision(existingVisit({ visit_method: "geolocation" }), "qr", duplicateCutoff);
+  assertEquals(decision?.status, "duplicate", "other path cannot resume a pending geolocation visit");
+  assertEquals(decision?.status === "duplicate" && decision.message.includes("parcours géolocalisation"), true, "message identifies geolocation as the path to resume");
 });
 
-Deno.test("a confirmed visit remains a duplicate after its sale is finalized", () => {
-  for (const vente_status of ["vente_realisee", "vente_non_realisee"]) {
+Deno.test("finalized visits block both validation paths", () => {
+  for (const vente_status of ["vente_realisee", "vente_non_realisee", "vente_livraison", "promesse_achat"]) {
     for (const requestedMethod of ["qr", "geolocation"]) {
-      assertEquals(isBlockingDuplicateVisit(existingVisit({ vente_status }), requestedMethod, duplicateCutoff), true, `${vente_status} remains a duplicate for ${requestedMethod}`);
+      const decision = getExistingVisitDecision(existingVisit({ vente_status }), requestedMethod, duplicateCutoff);
+      assertEquals(decision?.status, "duplicate", `${vente_status} remains a duplicate for ${requestedMethod}`);
     }
   }
+  const missingSaleStatus = getExistingVisitDecision(existingVisit({ vente_status: null }), "qr", duplicateCutoff);
+  assertEquals(missingSaleStatus?.status, "duplicate", "a visit without a sale status cannot be resumed");
+  assertEquals(missingSaleStatus?.status === "duplicate" && missingSaleStatus.message.includes("sans statut de finalisation"), true, "missing sale status is not described as finalized");
 });
 
-Deno.test("an out-of-zone attempt does not block validation after moving into range", () => {
+Deno.test("an out-of-zone attempt does not block a new in-zone validation", () => {
   assertEquals(isVisitOutOfZone(49.9), false, "49.9 m is inside the allowed radius");
-  assertEquals(isBlockingDuplicateVisit(existingVisit({ status: "out_of_zone" }), "geolocation", duplicateCutoff), false, "out-of-zone is not a confirmed visit");
+  assertEquals(getExistingVisitDecision(existingVisit({ status: "out_of_zone", vente_status: "out_of_zone" }), "geolocation", duplicateCutoff), null, "out-of-zone is not a confirmed visit");
 });
 
 Deno.test("a visit older than the duplicate cutoff does not block validation", () => {
-  assertEquals(isBlockingDuplicateVisit(existingVisit({ visited_at: "2026-11-13T23:34:59.999Z" }), "geolocation", duplicateCutoff), false, "older than cutoff does not block");
+  assertEquals(getExistingVisitDecision(existingVisit({ visited_at: "2026-11-13T23:34:59.999Z" }), "geolocation", duplicateCutoff), null, "older than cutoff does not block");
 });

@@ -53,24 +53,50 @@ export function shouldDeduplicateOutOfZoneAttempt(
   return displacement <= current.accuracy + previous.accuracy;
 }
 
-// Both validation paths treat any confirmed visit as a duplicate, regardless of sale outcome.
 export type DuplicateVisitCandidate = {
+  id: string;
   status: string | null;
   visited_at: string;
+  distance_meters: number;
+  accuracy?: number | null;
   visit_method?: string | null;
   vente_status?: string | null;
 };
 
-export function isBlockingDuplicateVisit(
+export type ExistingVisitDecision =
+  | { status: "resume"; visit: DuplicateVisitCandidate }
+  | { status: "duplicate"; visit: DuplicateVisitCandidate; message: string };
+
+export function getExistingVisitDecision(
   visit: DuplicateVisitCandidate | null,
-  requestedMethod: string,
+  requestedMethod: "qr" | "geolocation",
   since: number,
-): boolean {
-  if (!visit || visit.status !== "confirmed"
-    || (requestedMethod !== "qr" && requestedMethod !== "geolocation")) {
-    return false;
-  }
+): ExistingVisitDecision | null {
+  if (!visit || visit.status !== "confirmed") return null;
 
   const visitedAt = Date.parse(visit.visited_at);
-  return Number.isFinite(visitedAt) && visitedAt >= since;
+  if (!Number.isFinite(visitedAt) || visitedAt < since) return null;
+
+  if (visit.vente_status === "confirmed") {
+    if (visit.visit_method === requestedMethod) return { status: "resume", visit };
+
+    const originalMethod = visit.visit_method === "qr"
+      ? "QR"
+      : visit.visit_method === "geolocation"
+        ? "géolocalisation"
+        : "parcours initial";
+    return {
+      status: "duplicate",
+      visit,
+      message: `Cette visite est en attente de finalisation et a été enregistrée par le parcours ${originalMethod}. Reprenez-la avec ce parcours.`,
+    };
+  }
+
+  return {
+    status: "duplicate",
+    visit,
+    message: visit.vente_status
+      ? "Cette visite a déjà été finalisée et ne peut pas être finalisée une seconde fois."
+      : "Cette visite est déjà enregistrée sans statut de finalisation et ne peut pas être reprise automatiquement.",
+  };
 }
