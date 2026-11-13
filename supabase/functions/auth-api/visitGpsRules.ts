@@ -71,8 +71,9 @@ export function getExistingVisitDecision(
   visit: DuplicateVisitCandidate | null,
   requestedMethod: "qr" | "geolocation",
   since: number,
+  currentDistanceMeters: number,
 ): ExistingVisitDecision | null {
-  if (!visit || visit.status !== "confirmed") return null;
+  if (!visit || visit.status !== "confirmed" || isVisitOutOfZone(currentDistanceMeters)) return null;
 
   const visitedAt = Date.parse(visit.visited_at);
   if (!Number.isFinite(visitedAt) || visitedAt < since) return null;
