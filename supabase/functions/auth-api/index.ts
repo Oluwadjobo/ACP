@@ -1,4 +1,12 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import {
+  MAX_VISIT_DISTANCE_METERS,
+  haversineMetersExact,
+  isVisitOutOfZone,
+  shouldDeduplicateOutOfZoneAttempt,
+  getExistingVisitDecision,
+  type OutOfZoneVisitAttempt,
+} from "./visitGpsRules.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,7 +24,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
-const MAX_DISTANCE_METERS = 30;
+
 const MAX_GPS_ACCURACY_METERS = 15;
 const MAX_GEOLOCATION_GPS_ACCURACY_METERS = 30;
 
@@ -3097,43 +3105,107 @@ async function handleRoute(req: Request): Promise<Response> {
         || typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0) {
         return jsonError(400, "Paramètres GPS invalides");
       }
-      let pvQuery = supabase.from("points_vente").select("id, latitude, longitude, name").eq("id", point_vente_id);
-      if (userTeamId) pvQuery = pvQuery.eq("team_id", userTeamId);
-      const { data: pv, error: pvError } = await pvQuery.maybeSingle();
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour valider une visite");
+      const { data: pv, error: pvError } = await supabase.from("points_vente")
+        .select("id, latitude, longitude, name, team_id").eq("id", point_vente_id).eq("team_id", userTeamId).maybeSingle();
       if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
-      const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
-      const acc = accuracy;
 
+      const acc = accuracy;
       if (acc > MAX_GPS_ACCURACY_METERS) {
         return jsonResponse({ status: "poor_gps", accuracy: acc, message: "Signal GPS insuffisant. Veuillez patienter quelques secondes ou vous déplacer dans une zone mieux couverte avant de réessayer." }, 200);
       }
 
-      if (distance > MAX_DISTANCE_METERS) {
-        const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "out_of_zone", vente_status: "out_of_zone", visit_method: "qr", user_role: userRole };
-        if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
-        if (userTeamId) insertData.team_id = userTeamId;
-        await supabase.from("visites").insert(insertData);
-        return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, message: "Vous êtes situé à plus de 30 mètres du point de vente. Rapprochez-vous puis réessayez.", debug: { userLat: Number(latitude), userLon: Number(longitude), pdvLat: pv.latitude, pdvLon: pv.longitude, pointName: pv.name } }, 200);
+      const distance = haversineMetersExact(latitude, longitude, pv.latitude, pv.longitude);
+      const currentAttempt: OutOfZoneVisitAttempt = {
+        point_vente_id, team_id: userTeamId, user_role: userRole,
+        commercial_id: userRole === "commercial" ? userId : null,
+        superviseur_id: userRole === "superviseur" ? userId : null,
+        visit_method: "qr", latitude, longitude, accuracy: acc,
+      };
+      if (isVisitOutOfZone(distance)) {
+        const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
+        let recentAttemptQuery = supabase.from("visites")
+          .select("id, visited_at, latitude, longitude, accuracy")
+          .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
+          .eq("visit_method", "qr").eq("status", "out_of_zone").eq("vente_status", "out_of_zone")
+          .gte("visited_at", fiveMinAgo).order("visited_at", { ascending: false }).limit(1);
+        if (userRole === "commercial") recentAttemptQuery = recentAttemptQuery.eq("commercial_id", userId);
+        else recentAttemptQuery = recentAttemptQuery.eq("superviseur_id", userId);
+        const { data: previousAttempt, error: recentAttemptError } = await recentAttemptQuery.maybeSingle();
+        if (recentAttemptError) return jsonError(500, "Erreur lors de la vérification des tentatives hors zone");
+        if (previousAttempt && shouldDeduplicateOutOfZoneAttempt(currentAttempt, {
+          ...currentAttempt,
+          latitude: Number(previousAttempt.latitude),
+          longitude: Number(previousAttempt.longitude),
+          accuracy: typeof previousAttempt.accuracy === "number" ? previousAttempt.accuracy : null,
+        })) {
+          return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, duplicate: true, message: "Cette tentative hors zone a déjà été enregistrée. Réessayez si votre position a changé.", debug: { userLat: latitude, userLon: longitude, pdvLat: pv.latitude, pdvLon: pv.longitude, pointName: pv.name } }, 200);
+        }
+        const insertData: Record<string, unknown> = {
+          ...currentAttempt, distance_meters: distance,
+          status: "out_of_zone", vente_status: "out_of_zone",
+        };
+        const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData)
+          .select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
+        if (insertError || !visit) {
+          console.error("out-of-zone QR visit insert failed", insertError);
+          return jsonError(500, "Erreur lors de l'enregistrement de la tentative hors zone");
+        }
+        return jsonResponse({ status: "out_of_zone", distance, accuracy: acc, visit, message: `Vous êtes à ${distance.toFixed(2)} m du point de vente. Rapprochez-vous à ${MAX_VISIT_DISTANCE_METERS} m ou moins puis réessayez.`, debug: { userLat: latitude, userLon: longitude, pdvLat: pv.latitude, pdvLon: pv.longitude, pointName: pv.name } }, 200);
       }
 
       const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
-      let dedupQuery = supabase.from("visites").select("id, visited_at").eq("point_vente_id", point_vente_id).gte("visited_at", fiveMinAgo).order("visited_at", { ascending: false }).limit(1);
-      if (userRole === "commercial") dedupQuery = dedupQuery.eq("commercial_id", userId); else dedupQuery = dedupQuery.eq("superviseur_id", userId);
-      if (userTeamId) dedupQuery = dedupQuery.eq("team_id", userTeamId);
-      const { data: recent } = await dedupQuery.maybeSingle();
-      if (recent) return jsonResponse({ status: "duplicate", message: `Une visite a déjà été enregistrée à ce point il y a moins de ${DOUBLE_SCAN_MINUTES} minutes.`, lastVisit: recent.visited_at }, 200);
+      let dedupQuery = supabase.from("visites").select("id, visited_at, status, visit_method, vente_status, distance_meters, accuracy")
+        .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
+        .eq("status", "confirmed")
+        .gte("visited_at", fiveMinAgo).order("visited_at", { ascending: false }).limit(1);
+      if (userRole === "commercial") dedupQuery = dedupQuery.eq("commercial_id", userId);
+      else dedupQuery = dedupQuery.eq("superviseur_id", userId);
+      const { data: recent, error: duplicateError } = await dedupQuery.maybeSingle();
+      if (duplicateError) return jsonError(500, "Erreur lors de la vérification des visites existantes");
+      const existingVisitDecision = getExistingVisitDecision(recent, "qr", Date.parse(fiveMinAgo), distance);
+      if (existingVisitDecision?.status === "resume") {
+        const visit = existingVisitDecision.visit;
+        return jsonResponse({
+          status: "confirmed",
+          distance: visit.distance_meters,
+          accuracy: visit.accuracy,
+          visit: {
+            id: visit.id,
+            visited_at: visit.visited_at,
+            distance_meters: visit.distance_meters,
+            status: "confirmed",
+            vente_status: visit.vente_status,
+          },
+        }, 200);
+      }
+      if (existingVisitDecision?.status === "duplicate") {
+        const visit = existingVisitDecision.visit;
+        return jsonResponse({
+          status: "duplicate",
+          message: existingVisitDecision.message,
+          lastVisit: visit.visited_at,
+          visit: {
+            id: visit.id,
+            visited_at: visit.visited_at,
+            distance_meters: visit.distance_meters,
+            status: "duplicate",
+            vente_status: visit.vente_status,
+          },
+        }, 200);
+      }
 
-      const insertData: Record<string, unknown> = { point_vente_id, latitude: Number(latitude), longitude: Number(longitude), accuracy: acc, distance_meters: distance, status: "confirmed", vente_status: "confirmed", visit_method: "qr", user_role: userRole };
-      if (userRole === "commercial") insertData.commercial_id = userId; else insertData.superviseur_id = userId;
-      if (userTeamId) insertData.team_id = userTeamId;
-      const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData).select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
-      if (insertError) {
+      const insertData: Record<string, unknown> = {
+        ...currentAttempt, distance_meters: distance, status: "confirmed", vente_status: "confirmed",
+      };
+      const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData)
+        .select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
+      if (insertError || !visit) {
         console.error("visite insert failed", insertError);
         return jsonError(500, "Erreur lors de l'enregistrement de la visite");
       }
       return jsonResponse({ status: "confirmed", distance, accuracy: acc, visit }, 201);
     }
-
     // --- FINALIZE VISIT ---
     if (path === "/visites/finalize" && method === "POST") {
       const denied = requirePermission("scan");
@@ -3961,70 +4033,110 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonError(400, "Paramètres invalides");
       }
       if (!userTeamId) return jsonError(400, "Une équipe est requise pour valider une visite géolocalisée");
-      if (typeof accuracy === "number" && accuracy > MAX_GEOLOCATION_GPS_ACCURACY_METERS) {
+      const { data: pv, error: pvError } = await supabase.from("points_vente")
+        .select("id, name, latitude, longitude, qr_token, team_id").eq("id", point_vente_id).eq("team_id", userTeamId).maybeSingle();
+      if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
+
+      if (accuracy > MAX_GEOLOCATION_GPS_ACCURACY_METERS) {
         return jsonResponse({
           status: "poor_gps",
           accuracy,
           message: "Signal GPS insuffisant. Veuillez patienter quelques secondes avant de réessayer.",
         });
       }
-      let pvQuery = supabase.from("points_vente").select("id, name, latitude, longitude, qr_token").eq("id", point_vente_id);
-      pvQuery = pvQuery.eq("team_id", userTeamId);
-      const { data: pv, error: pvError } = await pvQuery.maybeSingle();
-      if (pvError || !pv) return jsonError(404, "Point de vente introuvable");
-      const distance = haversineMeters(latitude, longitude, pv.latitude, pv.longitude);
-      const MAX_DISTANCE = 30;
-      if (distance > MAX_DISTANCE) {
-        return jsonResponse({
-          status: "out_of_zone",
-          distance,
-          message: `Vous êtes à ${distance} m du point de vente. Rapprochez-vous à moins de ${MAX_DISTANCE} m.`,
-          debug: { userLat: latitude, userLon: longitude, pointName: pv.name },
-        });
+
+      const distance = haversineMetersExact(latitude, longitude, pv.latitude, pv.longitude);
+      const currentAttempt: OutOfZoneVisitAttempt = {
+        point_vente_id, team_id: userTeamId, user_role: userRole,
+        commercial_id: userRole === "commercial" ? userId : null,
+        superviseur_id: userRole === "superviseur" ? userId : null,
+        visit_method: "geolocation", latitude, longitude, accuracy,
+      };
+      if (isVisitOutOfZone(distance)) {
+        const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
+        let recentAttemptQuery = supabase.from("visites")
+          .select("id, visited_at, latitude, longitude, accuracy")
+          .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
+          .eq("visit_method", "geolocation").eq("status", "out_of_zone").eq("vente_status", "out_of_zone")
+          .gte("visited_at", fiveMinAgo).order("visited_at", { ascending: false }).limit(1);
+        if (userRole === "commercial") recentAttemptQuery = recentAttemptQuery.eq("commercial_id", userId);
+        else recentAttemptQuery = recentAttemptQuery.eq("superviseur_id", userId);
+        const { data: previousAttempt, error: recentAttemptError } = await recentAttemptQuery.maybeSingle();
+        if (recentAttemptError) return jsonError(500, "Erreur lors de la vérification des tentatives hors zone");
+        if (previousAttempt && shouldDeduplicateOutOfZoneAttempt(currentAttempt, {
+          ...currentAttempt,
+          latitude: Number(previousAttempt.latitude),
+          longitude: Number(previousAttempt.longitude),
+          accuracy: typeof previousAttempt.accuracy === "number" ? previousAttempt.accuracy : null,
+        })) {
+          return jsonResponse({ status: "out_of_zone", distance, accuracy, duplicate: true, message: "Cette tentative hors zone a déjà été enregistrée. Réessayez si votre position a changé.", pointName: pv.name, debug: { userLat: latitude, userLon: longitude, pointName: pv.name } }, 200);
+        }
+        const insertData: Record<string, unknown> = {
+          ...currentAttempt, distance_meters: distance,
+          status: "out_of_zone", vente_status: "out_of_zone",
+        };
+        const { data: visit, error: insertError } = await supabase.from("visites").insert(insertData)
+          .select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
+        if (insertError || !visit) {
+          console.error("out-of-zone geolocation visit insert failed", insertError);
+          return jsonError(500, "Erreur lors de l'enregistrement de la tentative hors zone");
+        }
+        return jsonResponse({ status: "out_of_zone", distance, accuracy, visit, pointName: pv.name, message: `Vous êtes à ${distance.toFixed(2)} m du point de vente. Rapprochez-vous à ${MAX_VISIT_DISTANCE_METERS} m ou moins puis réessayez.`, debug: { userLat: latitude, userLon: longitude, pointName: pv.name } }, 200);
       }
-      // Check for duplicate visit today
+
+      // Only a confirmed visit blocks a new in-zone validation; an old out-of-zone attempt never does.
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       let dupQuery = supabase.from("visites")
         .select("id, visited_at, status, vente_status, visit_method, latitude, longitude, accuracy, distance_meters")
         .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
+        .eq("status", "confirmed")
         .gte("visited_at", todayStart.toISOString()).order("visited_at", { ascending: false }).limit(1);
-      if (userRole === "commercial") {
-        dupQuery = dupQuery.eq("commercial_id", userId);
-      } else {
-        dupQuery = dupQuery.eq("superviseur_id", userId);
-      }
+      if (userRole === "commercial") dupQuery = dupQuery.eq("commercial_id", userId);
+      else dupQuery = dupQuery.eq("superviseur_id", userId);
       const { data: existing, error: duplicateError } = await dupQuery.maybeSingle();
       if (duplicateError) return jsonError(500, "Erreur lors de la vérification des visites existantes");
-      if (existing) {
-        if (existing.visit_method === "geolocation" && existing.status === "confirmed" && existing.vente_status === "confirmed") {
-          return jsonResponse({
-            status: "confirmed",
-            distance: existing.distance_meters,
-            accuracy: existing.accuracy,
-            visit: existing,
-            pointName: pv.name,
-          });
-        }
+      const existingVisitDecision = getExistingVisitDecision(existing, "geolocation", todayStart.getTime(), distance);
+      if (existingVisitDecision?.status === "resume") {
+        const visit = existingVisitDecision.visit;
         return jsonResponse({
-          status: "duplicate",
-          message: "Vous avez déjà visité ce point de vente aujourd'hui.",
-          visit: { id: existing.id, visited_at: existing.visited_at, distance_meters: distance, status: "duplicate", vente_status: null },
+          status: "confirmed",
+          distance: visit.distance_meters,
+          accuracy: visit.accuracy,
+          visit: {
+            id: visit.id,
+            visited_at: visit.visited_at,
+            distance_meters: visit.distance_meters,
+            status: "confirmed",
+            vente_status: visit.vente_status,
+          },
+          pointName: pv.name,
         });
       }
+      if (existingVisitDecision?.status === "duplicate") {
+        const visit = existingVisitDecision.visit;
+        return jsonResponse({
+          status: "duplicate",
+          message: existingVisitDecision.message,
+          distance: visit.distance_meters,
+          accuracy: visit.accuracy,
+          lastVisit: visit.visited_at,
+          visit: {
+            id: visit.id,
+            visited_at: visit.visited_at,
+            distance_meters: visit.distance_meters,
+            status: "duplicate",
+            vente_status: visit.vente_status,
+          },
+          pointName: pv.name,
+        });
+      }
+
       const insertData: Record<string, unknown> = {
-        point_vente_id,
-        latitude,
-        longitude,
-        accuracy: typeof accuracy === "number" ? accuracy : null,
+        ...currentAttempt,
         distance_meters: distance,
         status: "confirmed",
         vente_status: "confirmed",
-        visit_method: "geolocation",
-        user_role: userRole,
       };
-      if (userRole === "commercial") insertData.commercial_id = userId;
-      else insertData.superviseur_id = userId;
-      if (userTeamId) insertData.team_id = userTeamId;
       const { data: visit, error: visitError } = await supabase.from("visites").insert(insertData)
         .select("id, visited_at, distance_meters, status, vente_status").maybeSingle();
       if (visitError || !visit) {
