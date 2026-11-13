@@ -633,7 +633,7 @@ export function FieldScanner() {
                 <div className="card p-4 mb-6 text-left">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-500 flex items-center gap-1.5"><MapPin size={14} /> Distance</span>
-                    <span className="font-bold text-gray-900">{result.distance} m</span>
+                    <span className="font-bold text-gray-900">{typeof result.distance === "number" ? result.distance.toFixed(2) : "—"} m</span>
                   </div>
                   <div className="flex items-center justify-between text-sm mt-2">
                     <span className="text-gray-500 flex items-center gap-1.5"><Clock size={14} /> Heure</span>
@@ -653,9 +653,9 @@ export function FieldScanner() {
                 <div className="card p-4 mb-6">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-500 flex items-center gap-1.5"><MapPin size={14} /> Distance actuelle</span>
-                    <span className="font-bold text-error-600">{result.distance} m</span>
+                    <span className="font-bold text-error-600">{typeof result.distance === "number" ? result.distance.toFixed(2) : "—"} m</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 30 mètres.</p>
+                  <p className="text-xs text-gray-400 mt-2 text-center">La distance maximale autorisée est de 50 mètres.</p>
                   {result.debug && (
                     <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 space-y-0.5">
                       <p>Votre position : {result.debug.userLat.toFixed(6)}, {result.debug.userLon.toFixed(6)}</p>
