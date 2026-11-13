@@ -52,3 +52,25 @@ export function shouldDeduplicateOutOfZoneAttempt(
   // Treat overlapping GPS accuracy circles as measurement fluctuation, not confirmed movement.
   return displacement <= current.accuracy + previous.accuracy;
 }
+
+// Both validation paths treat any confirmed visit as a duplicate, regardless of sale outcome.
+export type DuplicateVisitCandidate = {
+  status: string | null;
+  visited_at: string;
+  visit_method?: string | null;
+  vente_status?: string | null;
+};
+
+export function isBlockingDuplicateVisit(
+  visit: DuplicateVisitCandidate | null,
+  requestedMethod: string,
+  since: number,
+): boolean {
+  if (!visit || visit.status !== "confirmed"
+    || (requestedMethod !== "qr" && requestedMethod !== "geolocation")) {
+    return false;
+  }
+
+  const visitedAt = Date.parse(visit.visited_at);
+  return Number.isFinite(visitedAt) && visitedAt >= since;
+}

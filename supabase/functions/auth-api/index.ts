@@ -4,6 +4,7 @@ import {
   haversineMetersExact,
   isVisitOutOfZone,
   shouldDeduplicateOutOfZoneAttempt,
+  isBlockingDuplicateVisit,
   type OutOfZoneVisitAttempt,
 } from "./visitGpsRules.ts";
 
@@ -3154,15 +3155,15 @@ async function handleRoute(req: Request): Promise<Response> {
       }
 
       const fiveMinAgo = new Date(Date.now() - DOUBLE_SCAN_MINUTES * 60 * 1000).toISOString();
-      let dedupQuery = supabase.from("visites").select("id, visited_at")
+      let dedupQuery = supabase.from("visites").select("id, visited_at, status, visit_method, vente_status")
         .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
-        .eq("visit_method", "qr").eq("status", "confirmed").eq("vente_status", "confirmed")
+        .eq("status", "confirmed")
         .gte("visited_at", fiveMinAgo).order("visited_at", { ascending: false }).limit(1);
       if (userRole === "commercial") dedupQuery = dedupQuery.eq("commercial_id", userId);
       else dedupQuery = dedupQuery.eq("superviseur_id", userId);
       const { data: recent, error: duplicateError } = await dedupQuery.maybeSingle();
       if (duplicateError) return jsonError(500, "Erreur lors de la vérification des visites existantes");
-      if (recent) return jsonResponse({ status: "duplicate", message: `Une visite a déjà été enregistrée à ce point il y a moins de ${DOUBLE_SCAN_MINUTES} minutes.`, lastVisit: recent.visited_at }, 200);
+      if (isBlockingDuplicateVisit(recent, "qr", Date.parse(fiveMinAgo))) return jsonResponse({ status: "duplicate", message: `Une visite a déjà été enregistrée à ce point il y a moins de ${DOUBLE_SCAN_MINUTES} minutes.`, lastVisit: recent.visited_at }, 200);
 
       const insertData: Record<string, unknown> = {
         ...currentAttempt, distance_meters: distance, status: "confirmed", vente_status: "confirmed",
@@ -4056,26 +4057,27 @@ async function handleRoute(req: Request): Promise<Response> {
       let dupQuery = supabase.from("visites")
         .select("id, visited_at, status, vente_status, visit_method, latitude, longitude, accuracy, distance_meters")
         .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)
-        .eq("status", "confirmed").eq("vente_status", "confirmed")
+        .eq("status", "confirmed")
         .gte("visited_at", todayStart.toISOString()).order("visited_at", { ascending: false }).limit(1);
       if (userRole === "commercial") dupQuery = dupQuery.eq("commercial_id", userId);
       else dupQuery = dupQuery.eq("superviseur_id", userId);
       const { data: existing, error: duplicateError } = await dupQuery.maybeSingle();
       if (duplicateError) return jsonError(500, "Erreur lors de la vérification des visites existantes");
-      if (existing) {
-        if (existing.visit_method === "geolocation") {
-          return jsonResponse({
-            status: "confirmed",
-            distance: existing.distance_meters,
-            accuracy: existing.accuracy,
-            visit: existing,
-            pointName: pv.name,
-          });
-        }
+      if (isBlockingDuplicateVisit(existing, "geolocation", todayStart.getTime())) {
         return jsonResponse({
           status: "duplicate",
+          distance: existing.distance_meters,
+          accuracy: existing.accuracy,
           message: "Vous avez déjà visité ce point de vente aujourd'hui.",
-          visit: { id: existing.id, visited_at: existing.visited_at, distance_meters: distance, status: "duplicate", vente_status: null },
+          lastVisit: existing.visited_at,
+          visit: {
+            id: existing.id,
+            visited_at: existing.visited_at,
+            distance_meters: existing.distance_meters,
+            status: "duplicate",
+            vente_status: existing.vente_status,
+          },
+          pointName: pv.name,
         });
       }
       const insertData: Record<string, unknown> = {

@@ -674,7 +674,7 @@ export function FieldScanner() {
             {result.status === "duplicate" && (
               <div className="text-center">
                 <div className="w-24 h-24 rounded-full bg-warning-50 flex items-center justify-center mx-auto mb-5"><AlertTriangle size={52} className="text-warning-600" /></div>
-                <h1 className="text-2xl font-bold text-gray-900 mb-2">Scan déjà effectué</h1>
+                <h1 className="text-2xl font-bold text-gray-900 mb-2">{geoMode ? "Visite déjà enregistrée" : "Scan déjà effectué"}</h1>
                 <p className="text-gray-500 text-sm mb-6">{result.message}</p>
                 <button onClick={reset} className="btn-primary w-full"><ScanLine size={18} /> Scanner un autre point</button>
               </div>

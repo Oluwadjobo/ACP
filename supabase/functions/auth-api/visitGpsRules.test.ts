@@ -1,5 +1,7 @@
 import {
   isVisitOutOfZone,
+  isBlockingDuplicateVisit,
+  type DuplicateVisitCandidate,
   shouldDeduplicateOutOfZoneAttempt,
   type OutOfZoneVisitAttempt,
 } from "./visitGpsRules.ts";
@@ -69,4 +71,49 @@ Deno.test("does not deduplicate when the previous GPS accuracy is unavailable", 
   const current = attempt();
   const previous = attempt({ accuracy: null });
   assertEquals(shouldDeduplicateOutOfZoneAttempt(current, previous), false, "missing accuracy is not treated as zero");
+});
+
+function existingVisit(overrides: Partial<DuplicateVisitCandidate> = {}): DuplicateVisitCandidate {
+  return {
+    status: "confirmed",
+    visited_at: "2026-11-13T23:40:00.000Z",
+    visit_method: "qr",
+    vente_status: "confirmed",
+    ...overrides,
+  };
+}
+
+const duplicateCutoff = Date.parse("2026-11-13T23:35:00.000Z");
+
+Deno.test("a confirmed QR visit blocks another QR validation", () => {
+  assertEquals(isBlockingDuplicateVisit(existingVisit(), "qr", duplicateCutoff), true, "confirmed QR visit blocks QR");
+});
+
+Deno.test("a confirmed geolocation visit blocks a QR validation", () => {
+  assertEquals(isBlockingDuplicateVisit(existingVisit({ visit_method: "geolocation" }), "qr", duplicateCutoff), true, "geolocation blocks QR");
+});
+
+Deno.test("a confirmed QR visit blocks a geolocation validation", () => {
+  assertEquals(isBlockingDuplicateVisit(existingVisit(), "geolocation", duplicateCutoff), true, "QR blocks geolocation");
+});
+
+Deno.test("a confirmed geolocation visit blocks another geolocation validation", () => {
+  assertEquals(isBlockingDuplicateVisit(existingVisit({ visit_method: "geolocation" }), "geolocation", duplicateCutoff), true, "geolocation blocks geolocation");
+});
+
+Deno.test("a confirmed visit remains a duplicate after its sale is finalized", () => {
+  for (const vente_status of ["vente_realisee", "vente_non_realisee"]) {
+    for (const requestedMethod of ["qr", "geolocation"]) {
+      assertEquals(isBlockingDuplicateVisit(existingVisit({ vente_status }), requestedMethod, duplicateCutoff), true, `${vente_status} remains a duplicate for ${requestedMethod}`);
+    }
+  }
+});
+
+Deno.test("an out-of-zone attempt does not block validation after moving into range", () => {
+  assertEquals(isVisitOutOfZone(49.9), false, "49.9 m is inside the allowed radius");
+  assertEquals(isBlockingDuplicateVisit(existingVisit({ status: "out_of_zone" }), "geolocation", duplicateCutoff), false, "out-of-zone is not a confirmed visit");
+});
+
+Deno.test("a visit older than the duplicate cutoff does not block validation", () => {
+  assertEquals(isBlockingDuplicateVisit(existingVisit({ visited_at: "2026-11-13T23:34:59.999Z" }), "geolocation", duplicateCutoff), false, "older than cutoff does not block");
 });
