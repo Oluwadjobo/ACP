@@ -333,11 +333,15 @@ export const api = {
       }),
     }),
 
-  listVisites: (page = 1, pageSize = 50) =>
-    apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
-      `/visites?page=${page}&pageSize=${pageSize}`,
+  listVisites: (page = 1, pageSize = 50, params?: { start_at?: string; end_before?: string }) => {
+    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (params?.start_at) qs.set("start_at", params.start_at);
+    if (params?.end_before) qs.set("end_before", params.end_before);
+    return apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
+      `/visites?${qs.toString()}`,
       { method: "GET" }
-    ),
+    );
+  },
 
   listPromesses: (page = 1, pageSize = 50) =>
     apiRequest<{ data: import("@/types").PromesseAchat[]; count: number; page: number; pageSize: number }>(
