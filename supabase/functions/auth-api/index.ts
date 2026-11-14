@@ -7,6 +7,10 @@ import {
   getExistingVisitDecision,
   type OutOfZoneVisitAttempt,
 } from "./visitGpsRules.ts";
+import {
+  hasRequiredPointVenteCreateFields,
+  normalizeOptionalAddress,
+} from "./pointVenteAddress.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2385,7 +2389,7 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/points-vente" && method === "POST") {
       { const denied = requireAnyAdminPermission("manage_points_vente"); if (denied) return denied; }
       const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
-      if (!name || !address || !city || latitude == null || longitude == null) return jsonError(400, "Tous les champs sont requis");
+      if (!hasRequiredPointVenteCreateFields({ name, city, latitude, longitude })) return jsonError(400, "Tous les champs sont requis");
       // Anti-duplication: check for probable duplicates before creating
       const { data: dups } = await supabase.rpc("find_duplicate_points_vente", {
         p_name: name.trim(), p_team_id: effectiveTeamId,
@@ -2396,7 +2400,7 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: normalizeOptionalAddress(address), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token };
       if (secteur_id) insertData.secteur_id = secteur_id;
       if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
@@ -2410,7 +2414,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const body = await req.json();
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (body.name !== undefined) updates.name = body.name.trim();
-      if (body.address !== undefined) updates.address = body.address.trim();
+      if (body.address !== undefined) updates.address = normalizeOptionalAddress(body.address);
       if (body.city !== undefined) updates.city = body.city.trim();
       if (body.latitude !== undefined) updates.latitude = Number(body.latitude);
       if (body.longitude !== undefined) updates.longitude = Number(body.longitude);
@@ -3966,7 +3970,7 @@ async function handleRoute(req: Request): Promise<Response> {
     if (path === "/points-vente" && method === "POST") {
       const denied = requirePermission("create_point_vente"); if (denied) return denied;
       const { name, address, city, latitude, longitude, secteur_id, frigo_comtesse } = await req.json();
-      if (!name || !address || !city || latitude == null || longitude == null || !secteur_id) return jsonError(400, "Tous les champs sont requis, y compris la tournée");
+      if (!hasRequiredPointVenteCreateFields({ name, city, latitude, longitude, secteurId: secteur_id })) return jsonError(400, "Tous les champs sont requis, y compris la tournée");
       const assignmentTable = userRole === "commercial" ? "commercial_tournees" : "team_leader_tournees";
       const ownerColumn = userRole === "commercial" ? "commercial_id" : "superviseur_id";
       let assignmentQuery = supabase.from(assignmentTable).select("secteur_id").eq(ownerColumn, session.user_id).eq("secteur_id", secteur_id);
@@ -3984,7 +3988,7 @@ async function handleRoute(req: Request): Promise<Response> {
       }
       const code = "PV-" + Math.random().toString(36).slice(2, 7).toUpperCase();
       const qr_token = generateQrToken();
-      const insertData: Record<string, unknown> = { code, name: name.trim(), address: address.trim(), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
+      const insertData: Record<string, unknown> = { code, name: name.trim(), address: normalizeOptionalAddress(address), city: city.trim(), latitude: Number(latitude), longitude: Number(longitude), qr_token, secteur_id, created_by: userId, created_by_role: userRole };
       if (frigo_comtesse !== undefined && frigo_comtesse !== null) insertData.frigo_comtesse = frigo_comtesse;
       if (userTeamId) insertData.team_id = userTeamId;
       // The QR secret is deliberately left out of the response: a field user never needs it.

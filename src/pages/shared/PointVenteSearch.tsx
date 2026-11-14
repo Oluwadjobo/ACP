@@ -3,6 +3,7 @@ import { Search, MapPin, Navigation, Store, Loader2, ArrowLeft, X } from "lucide
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Toast } from "@/components/Toast";
+import { formatPointVenteAddress } from "@/lib/format";
 
 interface SearchResult {
   id: string;
@@ -115,7 +116,7 @@ export function PointVenteSearch() {
                       <p className="font-semibold text-gray-900">{pv.name}</p>
                       <div className="flex items-center gap-1.5 text-sm text-gray-500 mt-0.5">
                         <MapPin size={14} />
-                        <span>{pv.address}, {pv.city}</span>
+                        <span>{formatPointVenteAddress(pv.address, pv.city)}</span>
                       </div>
                       {pv.secteur?.nom && (
                         <span className="inline-flex items-center gap-1 mt-1.5">

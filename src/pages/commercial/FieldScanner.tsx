@@ -7,6 +7,7 @@ import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { getAccuratePosition } from "@/lib/gps";
+import { formatPointVenteAddress } from "@/lib/format";
 
 type ScanState = "idle" | "scanning" | "resolving" | "result" | "action";
 type PostAction = "vente_realisee" | "vente_non_realisee" | "vente_livraison" | "promesse_achat" | null;
@@ -349,7 +350,7 @@ export function FieldScanner() {
                       <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0"><Store size={20} className="text-primary-600" /></div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
-                        <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
+                        <p className="text-xs text-gray-500 truncate">{formatPointVenteAddress(p.address, p.city)}</p>
                         <p className="text-xs text-primary-600 font-semibold mt-0.5">Distance estimée : {Math.round(p.distance_meters)} m</p>
                       </div>
                       <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
@@ -781,8 +782,8 @@ function CreatePointVenteModal({ open, onClose, onCreated }: { open: boolean; on
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Supérette du Centre" />
           </div>
           <div>
-            <label className="label">Adresse</label>
-            <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} required placeholder="12 rue de la Paix" />
+            <label className="label">Adresse (facultatif)</label>
+            <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="12 rue de la Paix" />
           </div>
           <div>
             <label className="label">Ville</label>

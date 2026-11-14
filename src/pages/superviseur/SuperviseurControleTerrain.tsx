@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { Modal } from "@/components/Modal";
 import type { PointVente, ControleNotation } from "@/types";
 import { CONTROLE_NOTATIONS } from "@/types";
+import { formatPointVenteAddress } from "@/lib/format";
 
 const NOTATION_COLORS: Record<ControleNotation, string> = {
   excellent: "bg-success-50 text-success-700 ring-success-200",
@@ -99,7 +100,7 @@ export function SuperviseurControleTerrain() {
                   <p className="text-xs text-gray-500 truncate">{p.city}</p>
                 </div>
               </div>
-              <p className="text-xs text-gray-400 truncate">{p.address}</p>
+              <p className="text-xs text-gray-400 truncate">{formatPointVenteAddress(p.address)}</p>
             </button>
           ))}
         </div>
@@ -111,7 +112,7 @@ export function SuperviseurControleTerrain() {
             <div className="bg-gray-50 rounded-xl p-3">
               <p className="text-xs text-gray-500">Point de vente</p>
               <p className="text-sm font-semibold text-gray-800 mt-0.5">{selected.name}</p>
-              <p className="text-xs text-gray-500">{selected.address}, {selected.city}</p>
+              <p className="text-xs text-gray-500">{formatPointVenteAddress(selected.address, selected.city)}</p>
             </div>
 
             {/* Notation */}

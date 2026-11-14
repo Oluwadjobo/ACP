@@ -4,7 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { TourneeDetail as TourneeDetailType } from "@/types";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatPointVenteAddress } from "@/lib/format";
 
 export function TourneeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -115,7 +115,7 @@ export function TourneeDetail() {
                       <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
                       <span className="text-[10px] text-gray-400 font-mono">{p.code}</span>
                     </div>
-                    <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
+                    <p className="text-xs text-gray-500 truncate">{formatPointVenteAddress(p.address, p.city)}</p>
 
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       <span className={`badge text-[10px] ${isVisited ? "bg-success-50 text-success-600" : "bg-gray-100 text-gray-500"}`}>
