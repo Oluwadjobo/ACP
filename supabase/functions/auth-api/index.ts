@@ -2569,11 +2569,22 @@ async function handleRoute(req: Request): Promise<Response> {
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
+      const startAtParam = url.searchParams.get("start_at");
+      const endBeforeParam = url.searchParams.get("end_before");
+      const startAt = startAtParam ? new Date(startAtParam) : null;
+      const endBefore = endBeforeParam ? new Date(endBeforeParam) : null;
+      if ((startAtParam && (!startAt || !Number.isFinite(startAt.getTime())))
+        || (endBeforeParam && (!endBefore || !Number.isFinite(endBefore.getTime())))
+        || (startAt && endBefore && startAt.getTime() >= endBefore.getTime())) {
+        return jsonError(400, "Période d'extraction invalide");
+      }
       let query = supabase
         .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
-          commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
-        .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
+          commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city, address)`, { count: "exact" })
+        .order("visited_at", { ascending: false }).order("id", { ascending: true }).range(offset, offset + pageSize - 1);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
+      if (startAt) query = query.gte("visited_at", startAt.toISOString());
+      if (endBefore) query = query.lt("visited_at", endBefore.toISOString());
       const { data, error, count } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
       return jsonResponse({ data, count: count || 0, page, pageSize });
