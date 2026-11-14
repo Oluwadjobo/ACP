@@ -2499,8 +2499,25 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- DASHBOARD STATS ---
     if (path === "/dashboard" && method === "GET") {
       { const denied = requireAnyAdminPermission("view_dashboard"); if (denied) return denied; }
+      const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+      const startDateParam = url.searchParams.get("date_start");
+      const endDateParam = url.searchParams.get("date_end");
+      if (startDateParam && !ISO_DATE.test(startDateParam)) return jsonError(400, "Date de début invalide");
+      if (endDateParam && !ISO_DATE.test(endDateParam)) return jsonError(400, "Date de fin invalide");
+      if (startDateParam && endDateParam && startDateParam > endDateParam) return jsonError(400, "La date de début doit précéder la date de fin");
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-      const todayIso = todayStart.toISOString();
+      const periodStart = startDateParam ? new Date(`${startDateParam}T00:00:00`) : todayStart;
+      const periodEndExclusive = endDateParam ? new Date(new Date(`${endDateParam}T00:00:00`).getTime() + 86_400_000) : null;
+      const todayIso = periodStart.toISOString();
+      const endIso = periodEndExclusive ? periodEndExclusive.toISOString() : null;
+      // Les compteurs bornés utilisent gte(start) et, si une fin est fournie, lt(end).
+      const boundedCount = (table: string, extra: Record<string, unknown> = {}) => {
+        let q = supabase.from(table).select("*", { count: "exact", head: true }).gte(table === "visites" ? "visited_at" : "created_at", todayIso);
+        if (endIso) q = q.lt(table === "visites" ? "visited_at" : "created_at", endIso);
+        if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId);
+        for (const [k, v] of Object.entries(extra)) q = q.eq(k, v);
+        return q;
+      };
 
       async function countWithTeam(table: string, extraFilters: Record<string, unknown> = {}) {
         let query = supabase.from(table).select("*", { count: "exact", head: true });
@@ -2539,16 +2556,16 @@ async function handleRoute(req: Request): Promise<Response> {
           if (error) throw new Error("Erreur lors du comptage des POS avec GPS");
           return count;
         }),
-        (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).eq("status", "out_of_zone").gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("promesses_achat").select("*", { count: "exact", head: true }).gte("created_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).eq("vente_status", "vente_realisee").gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("visites").select("*", { count: "exact", head: true }).eq("vente_status", "vente_non_realisee").gte("visited_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("bons_livraison").select("*", { count: "exact", head: true }).eq("statut", "en_attente"); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("bons_livraison").select("*", { count: "exact", head: true }).eq("statut", "livre"); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("bons_livraison").select("*", { count: "exact", head: true }).eq("statut", "partiel"); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("bons_livraison").select("*", { count: "exact", head: true }).eq("statut", "annule"); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
-        (async () => { let q = supabase.from("controles_terrain").select("*", { count: "exact", head: true }).gte("created_at", todayIso); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { count } = await q; return count || 0; })(),
+        (async () => { const { count } = await boundedCount("visites"); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("visites", { status: "out_of_zone" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("promesses_achat"); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("visites", { vente_status: "vente_realisee" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("visites", { vente_status: "vente_non_realisee" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("bons_livraison", { statut: "en_attente" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("bons_livraison", { statut: "livre" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("bons_livraison", { statut: "partiel" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("bons_livraison", { statut: "annule" }); return count || 0; })(),
+        (async () => { const { count } = await boundedCount("controles_terrain"); return count || 0; })(),
         (async () => { let q = supabase.from("visites").select("visited_at").order("visited_at", { ascending: false }).limit(1); if (effectiveTeamId) q = q.eq("team_id", effectiveTeamId); const { data } = await q.maybeSingle(); return data; })(),
       ]);
 
@@ -2569,10 +2586,15 @@ async function handleRoute(req: Request): Promise<Response> {
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
+      const dateFilter = readPeriodFilter(url);
       let query = supabase
         .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
           commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
+      if (dateFilter) {
+        query = query.gte("visited_at", dateFilter.startIso);
+        if (dateFilter.endIso) query = query.lt("visited_at", dateFilter.endIso);
+      }
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error, count } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
@@ -2585,10 +2607,15 @@ async function handleRoute(req: Request): Promise<Response> {
       const page = parseInt(url.searchParams.get("page") || "1");
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
+      const dateFilter = readPeriodFilter(url);
       let query = supabase
         .from("promesses_achat").select(`id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations, created_at,
           superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+      if (dateFilter) {
+        query = query.gte("created_at", dateFilter.startIso);
+        if (dateFilter.endIso) query = query.lt("created_at", dateFilter.endIso);
+      }
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error, count } = await query;
       if (error) return jsonError(500, "Erreur de lecture");
