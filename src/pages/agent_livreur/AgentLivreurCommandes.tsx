@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { Toast } from "@/components/Toast";
 import { Modal } from "@/components/Modal";
 import type { Commande, CommandeStatut } from "@/types";
+import { formatPointVenteAddress } from "@/lib/format";
 
 const STATUT_LABELS: Record<CommandeStatut, string> = {
   enregistree: "Enregistrée",
@@ -101,7 +102,7 @@ export function AgentLivreurCommandes() {
               </div>
 
               {cmd.point_vente && (
-                <p className="text-xs text-gray-500 mb-3">{cmd.point_vente.address}, {cmd.point_vente.city}</p>
+                <p className="text-xs text-gray-500 mb-3">{formatPointVenteAddress(cmd.point_vente.address, cmd.point_vente.city)}</p>
               )}
 
               {cmd.lignes && cmd.lignes.length > 0 && (

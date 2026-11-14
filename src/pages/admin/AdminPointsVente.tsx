@@ -7,6 +7,7 @@ import type { PointVente, Secteur, Commercial, Superviseur } from "@/types";
 import { Modal } from "@/components/Modal";
 import { getAccuratePosition } from "@/lib/gps";
 import { useAuth } from "@/lib/auth";
+import { formatPointVenteAddress } from "@/lib/format";
 
 interface DuplicateMatch {
   id: string;
@@ -328,7 +329,7 @@ export function AdminPointsVente() {
                   <div className="space-y-1 text-xs text-gray-500 mb-4">
                     <p className="flex items-start gap-1.5">
                       <MapPin size={12} className="mt-0.5 flex-shrink-0" />
-                      <span className="truncate">{p.address}, {p.city}</span>
+                      <span className="truncate">{formatPointVenteAddress(p.address, p.city)}</span>
                     </p>
                     <p className="text-gray-400">GPS: {p.latitude != null && p.longitude != null ? `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}` : "Non défini"}</p>
                     <p className="flex items-center gap-1.5">
@@ -534,7 +535,7 @@ function PointVenteModal({
                 <div key={d.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 text-xs">
                   <div>
                     <p className="font-medium text-gray-900">{d.name} ({d.code})</p>
-                    <p className="text-gray-500">{d.address}, {d.city}</p>
+                    <p className="text-gray-500">{formatPointVenteAddress(d.address, d.city)}</p>
                     <p className="text-gray-400">Correspondance: {d.match_type === "name" ? "Nom identique" : "GPS très proche"}</p>
                   </div>
                   {d.active === false && <span className="badge bg-gray-100 text-gray-500">Désactivé</span>}
@@ -560,8 +561,8 @@ function PointVenteModal({
           <input className="input" value={name} onChange={(e) => { setName(e.target.value); setCheckedDup(false); setDuplicates([]); }} required placeholder="Supérette du Centre" />
         </div>
         <div>
-          <label className="label">Adresse</label>
-          <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} required placeholder="12 rue de la Paix" />
+          <label className="label">Adresse (facultatif)</label>
+          <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="12 rue de la Paix" />
         </div>
         <div>
           <label className="label">Ville</label>
@@ -702,7 +703,7 @@ function QrModal({ point, onClose }: { point: PointVente | null; onClose: () => 
 
     pdf.setFontSize(11);
     pdf.setTextColor(80, 80, 80);
-    pdf.text(`${point.address}, ${point.city}`, pageWidth / 2, y, { align: "center" });
+    pdf.text(formatPointVenteAddress(point.address, point.city), pageWidth / 2, y, { align: "center" });
     y += 15;
 
     const imgSize = 90;
@@ -738,7 +739,7 @@ function QrModal({ point, onClose }: { point: PointVente | null; onClose: () => 
         <div className="text-center mb-4">
           <p className="font-bold text-gray-900">{point.name}</p>
           <p className="text-sm text-primary-600 font-medium">{point.code}</p>
-          <p className="text-xs text-gray-500 mt-1">{point.address}, {point.city}</p>
+          <p className="text-xs text-gray-500 mt-1">{formatPointVenteAddress(point.address, point.city)}</p>
         </div>
         <div className="flex gap-3 w-full">
           <button onClick={downloadPng} className="btn-secondary flex-1">
@@ -824,7 +825,7 @@ function BulkActionModal({
             <div key={p.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-xs">
               <div>
                 <p className="font-medium text-gray-900">{p.name} ({p.code})</p>
-                <p className="text-gray-500">{p.address}, {p.city}</p>
+                <p className="text-gray-500">{formatPointVenteAddress(p.address, p.city)}</p>
               </div>
               {p.active === false && <span className="badge bg-gray-100 text-gray-500">Désactivé</span>}
             </div>

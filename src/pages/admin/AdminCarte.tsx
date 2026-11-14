@@ -4,6 +4,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "@/lib/api";
 import type { PointVente, Secteur } from "@/types";
+import { formatPointVenteAddress } from "@/lib/format";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -191,8 +192,7 @@ export function AdminCarte() {
               <span style="width:10px;height:10px;border-radius:50%;background:${safeColor(color)};display:inline-block;"></span>
               <strong style="font-size:14px;color:#1f2937;">${escapeHtml(p.name)}</strong>
             </div>
-            <span style="font-size:12px;color:#6b7280;">${escapeHtml(p.address)}</span><br/>
-            <span style="font-size:12px;color:#6b7280;">${escapeHtml(p.city)}</span><br/>
+            <span style="font-size:12px;color:#6b7280;">${escapeHtml(formatPointVenteAddress(p.address, p.city))}</span><br/>
             <span style="font-size:11px;color:#9ca3af;">Code : ${escapeHtml(p.code)}</span>${p.secteur_nom ? `<br/><span style="font-size:11px;font-weight:600;color:${safeColor(color)};">Tournée : ${escapeHtml(p.secteur_nom)}</span>` : ""}
             <a href="https://www.google.com/maps/dir/?api=1&destination=${Number(p.latitude)},${Number(p.longitude)}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#0d1b5e;color:#fff;font-size:12px;font-weight:600;text-decoration:none;">📍 Y aller</a>
           </div>`
@@ -408,7 +408,7 @@ export function AdminCarte() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
-                          <p className="text-xs text-gray-500 truncate">{p.address}</p>
+                          <p className="text-xs text-gray-500 truncate">{formatPointVenteAddress(p.address)}</p>
                           <p className="text-xs text-gray-400">{p.city}</p>
                           {p.secteur_nom && (
                             <span className="inline-flex items-center gap-1 mt-1">

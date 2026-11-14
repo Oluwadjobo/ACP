@@ -12,6 +12,11 @@ export function formatDateTime(iso: string): string {
   return `${formatDate(iso)} à ${formatTime(iso)}`;
 }
 
+export function formatPointVenteAddress(address?: string | null, city?: string | null): string {
+  const parts = [address?.trim(), city?.trim()].filter((part): part is string => Boolean(part));
+  return parts.join(", ") || "Adresse non renseign\u00e9e";
+}
+
 export function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);

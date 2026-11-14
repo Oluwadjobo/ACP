@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { MesPointVente as MesPointVenteType } from "@/types";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatPointVenteAddress } from "@/lib/format";
 
 export function MesPointsVente() {
   const { userType } = useAuth();
@@ -95,7 +95,7 @@ export function MesPointsVente() {
                       <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
                       <span className="text-[10px] text-gray-400 font-mono">{p.code}</span>
                     </div>
-                    <p className="text-xs text-gray-500 truncate">{p.address}, {p.city}</p>
+                    <p className="text-xs text-gray-500 truncate">{formatPointVenteAddress(p.address, p.city)}</p>
 
                     {p.secteur_nom && (
                       <div className="flex items-center gap-1 mt-1.5">
