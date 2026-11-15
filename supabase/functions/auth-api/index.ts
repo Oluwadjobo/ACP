@@ -534,6 +534,16 @@ interface DailyReportData {
   totals: Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation">;
 }
 
+interface DailyReportDiagnostic {
+  total_visits: number;
+  classified_visits: number;
+  included_in_report: number;
+  visits_without_commercial: number;
+  supervisor_only_visits: number;
+  commercial_profile_missing: number;
+  unclassified_visits: number;
+}
+
 function isIsoReportDate(value: string | null): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -556,6 +566,17 @@ function portoNovoMidnight(date: string): Date {
   const part = (name: string) => Number(parts.find((item) => item.type === name)?.value);
   const representedAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
   return new Date(utcGuess - (representedAsUtc - utcGuess));
+}
+
+function portoNovoDateString(value = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Porto-Novo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (name: string) => parts.find((item) => item.type === name)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function classifyDailyReportVisit(visit: { status: string | null; vente_status: string | null }): keyof Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation" | "total"> | null {
@@ -632,6 +653,62 @@ async function buildDailyReportData(teamId: string, reportDate: string): Promise
   }), { out_of_zone: 0, presence_confirmed: 0, sale_not_realized: 0, sale_realized: 0, total: 0 });
 
   return { columns: DAILY_REPORT_COLUMNS, rows, totals };
+}
+
+async function buildDailyReportDiagnostic(teamId: string, reportDate: string): Promise<DailyReportDiagnostic> {
+  const start = portoNovoMidnight(reportDate);
+  const nextDate = new Date(Date.parse(`${reportDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+  const end = portoNovoMidnight(nextDate);
+  const visitsResult = await fetchAllRows((from, to) => supabase
+    .from("visites")
+    .select("id, commercial_id, superviseur_id, status, vente_status", { count: "exact" })
+    .eq("team_id", teamId)
+    .gte("visited_at", start.toISOString())
+    .lt("visited_at", end.toISOString())
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (visitsResult.error) throw new Error("Impossible de lire les visites de la journée");
+
+  const classified = visitsResult.data
+    .map((visit) => ({
+      visit,
+      category: classifyDailyReportVisit(visit as { status: string | null; vente_status: string | null }),
+    }))
+    .filter((entry) => entry.category !== null);
+  const commercialIds = [...new Set(classified
+    .map(({ visit }) => visit.commercial_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0))];
+  const commercialResult = commercialIds.length
+    ? await fetchRowsForIds(commercialIds, (batch, from, to) => supabase
+      .from("commerciaux")
+      .select("id, full_name")
+      .in("id", batch)
+      .order("id", { ascending: true })
+      .range(from, to))
+    : { data: [], error: null };
+  if (commercialResult.error) throw new Error("Impossible de vérifier les commerciaux du rapport");
+
+  const validCommercialIds = new Set((commercialResult.data as { id: string; full_name: string | null }[])
+    .filter((commercial) => typeof commercial.full_name === "string" && commercial.full_name.trim().length > 0)
+    .map((commercial) => commercial.id));
+  const visitsWithoutCommercial = classified.filter(({ visit }) =>
+    typeof visit.commercial_id !== "string" || visit.commercial_id.length === 0);
+  const supervisorOnlyVisits = visitsWithoutCommercial.filter(({ visit }) =>
+    typeof visit.superviseur_id === "string" && visit.superviseur_id.length > 0);
+  const includedInReport = classified.filter(({ visit }) =>
+    typeof visit.commercial_id === "string" && validCommercialIds.has(visit.commercial_id));
+  const commercialProfileMissing = classified.filter(({ visit }) =>
+    typeof visit.commercial_id === "string" && visit.commercial_id.length > 0 && !validCommercialIds.has(visit.commercial_id));
+
+  return {
+    total_visits: visitsResult.data.length,
+    classified_visits: classified.length,
+    included_in_report: includedInReport.length,
+    visits_without_commercial: visitsWithoutCommercial.length,
+    supervisor_only_visits: supervisorOnlyVisits.length,
+    commercial_profile_missing: commercialProfileMissing.length,
+    unclassified_visits: visitsResult.data.length - classified.length,
+  };
 }
 
 function dailyReportConversion(data: DailyReportData): number {
@@ -1216,6 +1293,22 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonResponse({ snapshot, audit: audit || [] });
       }
 
+      if (path === "/daily-reports/diagnostic" && method === "GET") {
+        const teamId = url.searchParams.get("team_id");
+        const date = url.searchParams.get("report_date");
+        if (!validTeamId(teamId) || !reportDate(date)) return jsonError(400, "Équipe ou date invalide");
+        if (date > portoNovoDateString()) return jsonError(400, "Impossible de diagnostiquer une date future");
+        const { data: team, error: teamError } = await loadTeam(teamId);
+        if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
+        if (!team) return jsonError(404, "Équipe introuvable");
+        try {
+          return jsonResponse(await buildDailyReportDiagnostic(teamId, date));
+        } catch (error) {
+          console.error("daily report diagnostic failed", error);
+          return jsonError(500, "Impossible de contrôler les visites de la journée");
+        }
+      }
+
       if (path === "/daily-reports/compare" && method === "GET") {
         const teamId = url.searchParams.get("team_id");
         const firstDate = url.searchParams.get("date_a");
@@ -1245,6 +1338,12 @@ async function handleRoute(req: Request): Promise<Response> {
         const teamId = typeof body.team_id === "string" ? body.team_id : "";
         const date = typeof body.report_date === "string" ? body.report_date : "";
         if (!validTeamId(teamId) || !reportDate(date)) return jsonError(400, "Équipe ou date invalide");
+        const currentDate = portoNovoDateString();
+        if (date >= currentDate) {
+          return jsonError(409, date === currentDate
+            ? "La journée est encore en cours. L'instantané final pourra être généré à partir du lendemain."
+            : "Impossible de générer un rapport pour une date future.");
+        }
         const { data: team, error: teamError } = await loadTeam(teamId);
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
@@ -1281,6 +1380,9 @@ async function handleRoute(req: Request): Promise<Response> {
         const expectedVersion = body.expected_version;
         if (!validTeamId(teamId) || !reportDate(date) || typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
           return jsonError(400, "Équipe, date ou version attendue invalide");
+        }
+        if (date >= portoNovoDateString()) {
+          return jsonError(409, "La journée doit être clôturée avant de régénérer son instantané.");
         }
         if (body.confirmed !== true) return jsonError(400, "Confirmation explicite de régénération requise");
         const { data: team, error: teamError } = await loadTeam(teamId);
