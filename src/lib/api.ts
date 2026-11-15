@@ -306,6 +306,19 @@ export const api = {
     );
   },
 
+  getDailyReportDiagnostic: (teamId: string, reportDate: string) => {
+    const qs = new URLSearchParams({ team_id: teamId, report_date: reportDate });
+    return apiRequest<{
+      total_visits: number;
+      classified_visits: number;
+      included_in_report: number;
+      visits_without_commercial: number;
+      supervisor_only_visits: number;
+      commercial_profile_missing: number;
+      unclassified_visits: number;
+    }>(`/daily-reports/diagnostic?${qs.toString()}`, { method: "GET" });
+  },
+
   compareDailyReports: (teamId: string, dateA: string, dateB: string) => {
     const qs = new URLSearchParams({ team_id: teamId, date_a: dateA, date_b: dateB });
     return apiRequest<{
