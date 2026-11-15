@@ -40,6 +40,27 @@ function todayInPortoNovo(): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+function dateInPortoNovo(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Porto-Novo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+interface DailyReportDiagnostic {
+  total_visits: number;
+  classified_visits: number;
+  included_in_report: number;
+  visits_without_commercial: number;
+  supervisor_only_visits: number;
+  commercial_profile_missing: number;
+  unclassified_visits: number;
+}
+
 function formatReportDate(value: string): string {
   return new Date(`${value}T12:00:00+01:00`).toLocaleDateString("fr-FR", {
     timeZone: "Africa/Porto-Novo",
@@ -130,6 +151,8 @@ export function AdminDailyReports() {
   const [dateB, setDateB] = useState(today);
   const [snapshot, setSnapshot] = useState<DailyReportSnapshot | null>(null);
   const [audit, setAudit] = useState<DailyReportAuditEntry[]>([]);
+  const [diagnostic, setDiagnostic] = useState<DailyReportDiagnostic | null>(null);
+  const [loadingDiagnostic, setLoadingDiagnostic] = useState(false);
   const [comparison, setComparison] = useState<{
     date_a: { date: string; snapshot: DailyReportSnapshot | null };
     date_b: { date: string; snapshot: DailyReportSnapshot | null };
@@ -141,6 +164,7 @@ export function AdminDailyReports() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const requestSequence = useRef(0);
+  const diagnosticRequestSequence = useRef(0);
 
   const selectedTeam = teams.find((team) => team.id === teamId);
   const displayTeamName = selectedTeam ? TEAM_NAMES[selectedTeam.code] || selectedTeam.name : "";
@@ -160,6 +184,9 @@ export function AdminDailyReports() {
   const loadDaily = useCallback(async () => {
     if (!teamId || !reportDate) return;
     const requestId = ++requestSequence.current;
+    diagnosticRequestSequence.current += 1;
+    setDiagnostic(null);
+    setLoadingDiagnostic(false);
     setLoadingReport(true);
     setError("");
     setNotice("");
@@ -179,6 +206,24 @@ export function AdminDailyReports() {
       if (requestId === requestSequence.current) setLoadingReport(false);
     }
   }, [teamId, reportDate]);
+
+  const loadDiagnostic = async () => {
+    if (!teamId || !reportDate) return;
+    const requestId = ++diagnosticRequestSequence.current;
+    setLoadingDiagnostic(true);
+    setError("");
+    try {
+      const result = await api.getDailyReportDiagnostic(teamId, reportDate);
+      if (requestId === diagnosticRequestSequence.current) setDiagnostic(result);
+    } catch (cause) {
+      if (requestId === diagnosticRequestSequence.current) {
+        setError((cause as Error).message || "Impossible de diagnostiquer les visites");
+        setDiagnostic(null);
+      }
+    } finally {
+      if (requestId === diagnosticRequestSequence.current) setLoadingDiagnostic(false);
+    }
+  };
 
   const loadComparison = useCallback(async () => {
     if (!teamId || !dateA || !dateB) return;
@@ -262,20 +307,29 @@ export function AdminDailyReports() {
     }
   };
 
-  const renderMissingSnapshot = (date: string) => (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
-      <div className="flex items-start gap-3">
-        <AlertTriangle size={20} className="mt-0.5 shrink-0" />
-        <div className="flex-1">
-          <p className="font-semibold">Instantané absent pour le {formatReportDate(date)}</p>
-          <p className="mt-1 text-sm">Les rapports historiques sont lus depuis les instantanés. Générez volontairement celui-ci pour pouvoir le consulter ou le comparer.</p>
-          <button onClick={() => void generate(date)} disabled={busy} className="btn-primary mt-4 disabled:opacity-50">
-            {busy ? "Génération…" : "Générer cet instantané"}
-          </button>
+  const renderMissingSnapshot = (date: string) => {
+    const isOpenOrFutureDay = date >= today;
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
+        <div className="flex items-start gap-3">
+          <AlertTriangle size={20} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold">Instantané absent pour le {formatReportDate(date)}</p>
+            {isOpenOrFutureDay ? (
+              <p className="mt-1 text-sm">Cette journée n'est pas encore clôturée. Pour éviter un rapport incomplet, l'instantané final sera disponible à partir du lendemain, après minuit (heure du Bénin).</p>
+            ) : (
+              <>
+                <p className="mt-1 text-sm">Aucun instantané n'a encore été créé pour cette journée clôturée. Générez-le pour consulter ou comparer le rapport.</p>
+                <button onClick={() => void generate(date)} disabled={busy} className="btn-primary mt-4 disabled:opacity-50">
+                  {busy ? "Génération…" : "Générer cet instantané"}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const comparisonRows = useMemo(() => {
     const a = comparison?.date_a.snapshot;
@@ -361,10 +415,51 @@ export function AdminDailyReports() {
               </div>
             </div>
             <SnapshotSummary snapshot={snapshot} />
+            {dateInPortoNovo(new Date(snapshot.generated_at)) === snapshot.report_date && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-semibold">Attention : instantané créé pendant la journée</p>
+                <p className="mt-1">Cette version a été générée avant la clôture du {formatReportDate(snapshot.report_date)}. Elle peut ne pas inclure les visites enregistrées plus tard. Après clôture, utilisez « Régénérer » : la version actuelle restera conservée dans l'historique.</p>
+              </div>
+            )}
             <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
               <h3 className="text-sm font-semibold text-blue-950">Commentaire journalier</h3>
               <p className="mt-1 text-sm leading-6 text-blue-900">{snapshot.analytical_comment}</p>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void loadDiagnostic()} disabled={loadingDiagnostic || reportDate > today} className="btn-secondary inline-flex items-center gap-2 disabled:opacity-50">
+                <AlertTriangle size={16} /> {loadingDiagnostic ? "Analyse des visites…" : "Diagnostiquer les visites"}
+              </button>
+              <span className="text-xs text-gray-500">Contrôle en lecture seule, sans modification des données.</span>
+            </div>
+            {diagnostic && (
+              <section className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+                <h3 className="font-semibold text-gray-900">Diagnostic des visites · {formatReportDate(snapshot.report_date)}</h3>
+                <p className="mt-1 text-sm text-gray-500">Comparaison entre les visites présentes en base et celles prises en compte dans le tableau du rapport.</p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["Visites enregistrées", diagnostic.total_visits],
+                    ["Visites avec statut reconnu", diagnostic.classified_visits],
+                    ["Visites intégrées au rapport", diagnostic.included_in_report],
+                    ["Visites sans commercial", diagnostic.visits_without_commercial],
+                    ["Dont visites de superviseurs", diagnostic.supervisor_only_visits],
+                    ["Commercial introuvable", diagnostic.commercial_profile_missing],
+                    ["Statut non comptabilisé", diagnostic.unclassified_visits],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-lg bg-gray-50 p-3">
+                      <p className="text-xs text-gray-500">{label}</p>
+                      <p className="mt-1 text-xl font-semibold tabular-nums text-gray-900">{Number(value).toLocaleString("fr-FR")}</p>
+                    </div>
+                  ))}
+                </div>
+                {diagnostic.total_visits === 0 ? (
+                  <p className="mt-4 text-sm text-amber-800">Aucune visite n'est retrouvée pour cette équipe et cette journée dans la table des visites.</p>
+                ) : diagnostic.included_in_report < diagnostic.total_visits ? (
+                  <p className="mt-4 text-sm text-amber-800">Certaines visites ne sont pas intégrées au tableau. Les catégories ci-dessus indiquent si elles sont sans commercial, rattachées à un superviseur, associées à un profil commercial introuvable ou porteuses d'un statut non comptabilisé.</p>
+                ) : (
+                  <p className="mt-4 text-sm text-emerald-800">Toutes les visites trouvées sont intégrées au rapport.</p>
+                )}
+              </section>
+            )}
             <ReportTable snapshot={snapshot} />
 
             <section className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
