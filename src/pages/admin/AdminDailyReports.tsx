@@ -409,7 +409,7 @@ export function AdminDailyReports() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={exportJpg} className="btn-secondary inline-flex items-center gap-2"><FileImage size={16} /> Exporter JPG</button>
-                <button type="button" onClick={() => void regenerate()} disabled={busy} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+                <button type="button" onClick={() => void regenerate()} disabled={busy || snapshot.report_date >= today} title={snapshot.report_date >= today ? "La journée doit être clôturée avant régénération." : undefined} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
                   <RefreshCw size={16} /> {busy ? "Régénération…" : "Régénérer"}
                 </button>
               </div>
