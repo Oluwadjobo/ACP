@@ -142,7 +142,7 @@ function SnapshotSummary({ snapshot }: { snapshot: DailyReportSnapshot }) {
 }
 
 export function AdminDailyReports() {
-  const today = useMemo(todayInPortoNovo, []);
+  const today = todayInPortoNovo();
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState("");
   const [mode, setMode] = useState<ViewMode>("daily");
