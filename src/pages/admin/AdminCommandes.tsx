@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ClipboardList, Loader2, Package, MapPin, User, Clock, CheckCircle2, XCircle } from "lucide-react";
+import { ClipboardList, Loader2, Package, MapPin, User, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 import type { Commande, CommandeStatut } from "@/types";

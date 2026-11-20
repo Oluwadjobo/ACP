@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { Store, MapPin, Search, ChevronLeft, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package } from "lucide-react";
+import { Store, Search, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";

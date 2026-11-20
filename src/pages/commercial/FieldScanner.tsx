@@ -1,9 +1,9 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import jsQR from "jsqr";
-import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, LocateFixed, Navigation, Search } from "lucide-react";
+import { ScanLine, MapPin, CheckCircle2, XCircle, AlertTriangle, Clock, History, Camera, CameraOff, RefreshCw, TrendingUp, TrendingDown, Package, ChevronRight, Loader2, Plus, Trash2, Truck, FileText, ClipboardCheck, Store, X, Satellite, Navigation, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { VisitResult, Produit, VenteStatus, Secteur } from "@/types";
-import { VENTE_MOTIFS, VENTE_NON_REALISEE_MOTIFS } from "@/types";
+import type { VisitResult, Produit, Secteur } from "@/types";
+import { VENTE_NON_REALISEE_MOTIFS } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { getAccuratePosition } from "@/lib/gps";
@@ -271,11 +271,9 @@ export function FieldScanner() {
     }
   };
 
-  const homePath = isSuperviseur ? "/superviseur" : "/commercial";
   const historyPath = isSuperviseur ? "/superviseur/historique" : "/commercial/historique";
   const tourneesPath = isSuperviseur ? "/superviseur/tournees" : "/commercial/tournees";
   const pointsPath = isSuperviseur ? "/superviseur/points-vente" : "/commercial/points-vente";
-  const ventesNonRealiseesPath = "/superviseur/ventes-non-realisees";
   const controleTerrainPath = "/superviseur/controle-terrain";
   const roleLabel = isSuperviseur ? "Team Leader" : "Commercial";
 

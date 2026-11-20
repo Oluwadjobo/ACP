@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MapPin, Store, TrendingUp, CheckCircle2, XCircle, Clock, Truck, ChevronLeft, Navigation, Phone, Map as MapIcon } from "lucide-react";
+import { MapPin, Store, TrendingUp, CheckCircle2, Clock, Truck, ChevronLeft, Navigation, Phone } from "lucide-react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";

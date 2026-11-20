@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MapPin, Store, TrendingUp, TrendingDown, Package, Truck, ChevronRight, Clock, CheckCircle2, Circle, AlertCircle } from "lucide-react";
+import { MapPin, TrendingUp, TrendingDown, Package, Truck, ChevronRight, Clock, CheckCircle2, Circle, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";

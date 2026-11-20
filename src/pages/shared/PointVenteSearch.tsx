@@ -1,7 +1,6 @@
 import { useState, useRef } from "react";
 import { Search, MapPin, Navigation, Store, Loader2, ArrowLeft, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { Toast } from "@/components/Toast";
 import { formatPointVenteAddress } from "@/lib/format";
 
@@ -19,7 +18,6 @@ interface SearchResult {
 }
 
 export function PointVenteSearch() {
-  const { userType } = useAuth();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,7 +53,6 @@ export function PointVenteSearch() {
     window.open(url, isMobile ? "_blank" : "_blank");
   };
 
-  const homePath = userType === "agent_livreur" ? "/agent-livreur" : userType === "superviseur" ? "/superviseur" : "/commercial";
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
