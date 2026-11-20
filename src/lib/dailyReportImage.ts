@@ -5,12 +5,14 @@ const MARGIN = 48;
 const TABLE_WIDTH = IMAGE_WIDTH - MARGIN * 2;
 const ROW_HEIGHT = 46;
 const TABLE_COLUMNS = [
-  { title: "Commercial", width: 470, key: "name" },
-  { title: "Hors zone", width: 190, key: "out_of_zone" },
-  { title: "Présence confirmée", width: 220, key: "presence_confirmed" },
-  { title: "Vente non réalisée", width: 230, key: "sale_not_realized" },
-  { title: "Vente réalisée", width: 200, key: "sale_realized" },
-  { title: "Total général", width: 194, key: "total" },
+  { title: "Commercial", width: 380, key: "name" },
+  { title: "Hors zone", width: 145, key: "out_of_zone" },
+  { title: "Présence confirmée", width: 160, key: "presence_confirmed" },
+  { title: "Vente non réalisée", width: 155, key: "sale_not_realized" },
+  { title: "Vente réalisée", width: 140, key: "sale_realized" },
+  { title: "Vente additionnelle réalisée", width: 170, key: "sale_additional_realized" },
+  { title: "Vente additionnelle non réalisée", width: 185, key: "sale_additional_not_realized" },
+  { title: "Total général", width: 169, key: "total" },
 ] as const;
 
 interface DailyImageOptions {
@@ -89,7 +91,8 @@ function drawSummary(ctx: CanvasRenderingContext2D, y: number, snapshot: DailyRe
   ctx.fillRect(MARGIN, y, TABLE_WIDTH, 120);
   ctx.fillStyle = "#0f172a";
   ctx.font = "700 23px Arial, sans-serif";
-  ctx.fillText(`Total général : ${formatNumber(totals.total) || "0"}  |  Taux de conversion : ${snapshot.conversion_rate.toFixed(2)} %`, MARGIN + 22, y + 20);
+  const overallTotal = totals.total + (snapshot.additional_sales_data?.totals.total ?? 0);
+  ctx.fillText(`Total général : ${formatNumber(overallTotal) || "0"}  |  Taux de conversion : ${snapshot.conversion_rate.toFixed(2)} %`, MARGIN + 22, y + 20);
   ctx.font = "18px Arial, sans-serif";
   ctx.fillStyle = "#475569";
   ctx.fillText(`Version ${snapshot.version}  •  Généré le ${new Date(snapshot.generated_at).toLocaleString("fr-FR")}`, MARGIN + 22, y + 62);
@@ -135,7 +138,27 @@ function drawTable(
   });
   y += 70;
 
-  const rows = snapshot.report_data.rows;
+  const additional = snapshot.additional_sales_data;
+  const rowMap = new Map(snapshot.report_data.rows.map((row) => [row.commercial_id, { ...row }]));
+  for (const addition of additional?.rows ?? []) {
+    if (!rowMap.has(addition.commercial_id)) {
+      rowMap.set(addition.commercial_id, {
+        commercial_id: addition.commercial_id,
+        commercial_name_at_generation: addition.commercial_name_at_generation,
+        out_of_zone: 0,
+        presence_confirmed: 0,
+        sale_not_realized: 0,
+        sale_realized: 0,
+        total: 0,
+      });
+    }
+  }
+  const additionByCommercial = new Map((additional?.rows ?? []).map((row) => [row.commercial_id, row]));
+  const rows = [...rowMap.values()].sort((a, b) => {
+    const totalA = a.total + (additionByCommercial.get(a.commercial_id)?.total ?? 0);
+    const totalB = b.total + (additionByCommercial.get(b.commercial_id)?.total ?? 0);
+    return totalB - totalA || a.commercial_name_at_generation.localeCompare(b.commercial_name_at_generation, "fr");
+  });
   rows.forEach((row, index) => {
     if (index % 2 === 0) {
       ctx.fillStyle = "#f8fafc";
@@ -143,13 +166,16 @@ function drawTable(
     }
     ctx.fillStyle = "#1e293b";
     ctx.font = "17px Arial, sans-serif";
+    const addition = additionByCommercial.get(row.commercial_id);
     const values: string[] = [
       row.commercial_name_at_generation,
       formatNumber(row.out_of_zone),
       formatNumber(row.presence_confirmed),
       formatNumber(row.sale_not_realized),
       formatNumber(row.sale_realized),
-      formatNumber(row.total),
+      formatNumber(addition?.sale_additional_realized ?? 0),
+      formatNumber(addition?.sale_additional_not_realized ?? 0),
+      formatNumber(row.total + (addition?.total ?? 0)),
     ];
     let cellX = MARGIN;
     values.forEach((value, cellIndex) => {
@@ -177,11 +203,17 @@ function drawTable(
   });
 
   const totals = snapshot.report_data.totals;
-  drawTotalsRow(ctx, y, totals);
+  const additionTotals = snapshot.additional_sales_data?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+  drawTotalsRow(ctx, y, {
+    ...totals,
+    sale_additional_realized: additionTotals.sale_additional_realized,
+    sale_additional_not_realized: additionTotals.sale_additional_not_realized,
+    total: totals.total + additionTotals.total,
+  } as DailyReportTotals & { sale_additional_realized: number; sale_additional_not_realized: number });
   return y + 72;
 }
 
-function drawTotalsRow(ctx: CanvasRenderingContext2D, y: number, totals: DailyReportTotals): void {
+function drawTotalsRow(ctx: CanvasRenderingContext2D, y: number, totals: DailyReportTotals & { sale_additional_realized?: number; sale_additional_not_realized?: number }): void {
   ctx.fillStyle = "#e2e8f0";
   ctx.fillRect(MARGIN, y, TABLE_WIDTH, 54);
   ctx.fillStyle = "#0f172a";
@@ -192,6 +224,8 @@ function drawTotalsRow(ctx: CanvasRenderingContext2D, y: number, totals: DailyRe
     formatNumber(totals.presence_confirmed),
     formatNumber(totals.sale_not_realized),
     formatNumber(totals.sale_realized),
+    formatNumber(totals.sale_additional_realized ?? 0),
+    formatNumber(totals.sale_additional_not_realized ?? 0),
     formatNumber(totals.total),
   ];
   let x = MARGIN;
@@ -248,20 +282,24 @@ function drawComparisonSummary(
     x += column.width;
   });
   tableY += 48;
-  const metrics: { label: string; key: keyof DailyReportTotals }[] = [
-    { label: "Hors zone", key: "out_of_zone" },
-    { label: "Présence confirmée", key: "presence_confirmed" },
-    { label: "Vente non réalisée", key: "sale_not_realized" },
-    { label: "Vente réalisée", key: "sale_realized" },
-    { label: "Total général", key: "total" },
+  const additionsA = snapshotA.additional_sales_data?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+  const additionsB = snapshotB.additional_sales_data?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+  const metrics = [
+    { label: "Hors zone", a: snapshotA.report_data.totals.out_of_zone, b: snapshotB.report_data.totals.out_of_zone },
+    { label: "Présence confirmée", a: snapshotA.report_data.totals.presence_confirmed, b: snapshotB.report_data.totals.presence_confirmed },
+    { label: "Vente non réalisée", a: snapshotA.report_data.totals.sale_not_realized, b: snapshotB.report_data.totals.sale_not_realized },
+    { label: "Vente réalisée", a: snapshotA.report_data.totals.sale_realized, b: snapshotB.report_data.totals.sale_realized },
+    { label: "Vente additionnelle réalisée", a: additionsA.sale_additional_realized, b: additionsB.sale_additional_realized },
+    { label: "Vente additionnelle non réalisée", a: additionsA.sale_additional_not_realized, b: additionsB.sale_additional_not_realized },
+    { label: "Total général", a: snapshotA.report_data.totals.total + additionsA.total, b: snapshotB.report_data.totals.total + additionsB.total },
   ];
   metrics.forEach((metric, index) => {
     if (index % 2 === 0) {
       ctx.fillStyle = "#f8fafc";
       ctx.fillRect(MARGIN, tableY, TABLE_WIDTH, 44);
     }
-    const a = snapshotA.report_data.totals[metric.key];
-    const b = snapshotB.report_data.totals[metric.key];
+    const a = metric.a;
+    const b = metric.b;
     const values = [metric.label, formatNumber(a) || "0", formatNumber(b) || "0", `${b - a > 0 ? "+" : ""}${b - a}`, percentageChange(a, b)];
     ctx.fillStyle = "#1e293b";
     ctx.font = "17px Arial, sans-serif";
