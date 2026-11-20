@@ -1292,7 +1292,7 @@ async function handleRoute(req: Request): Promise<Response> {
         const rateDelta = secondRate - firstRate;
         const direction = totalDelta > 0 ? "en hausse" : totalDelta < 0 ? "en baisse" : "stable";
         const rateDirection = rateDelta > 0 ? "en hausse" : rateDelta < 0 ? "en baisse" : "stable";
-        return `Entre le ${firstDate} et le ${secondDate}, le total des visites est ${direction} de ${Math.abs(totalDelta)} (${totalDelta > 0 ? "+" : ""}${totalDelta}). Le taux de conversion passe de ${firstRate.toFixed(2)} % à ${secondRate.toFixed(2)} %, ${rateDirection} de ${Math.abs(rateDelta).toFixed(2)} point${Math.abs(rateDelta) === 1 ? "" : "s"}.`;
+        return `Entre le ${firstDate} et le ${secondDate}, le total général des visites et ventes additionnelles est ${direction} de ${Math.abs(totalDelta)} (${totalDelta > 0 ? "+" : ""}${totalDelta}). Le taux de conversion des visites physiques passe de ${firstRate.toFixed(2)} % à ${secondRate.toFixed(2)} %, ${rateDirection} de ${Math.abs(rateDelta).toFixed(2)} point${Math.abs(rateDelta) === 1 ? "" : "s"}.`;
       };
 
       if (path === "/daily-reports/teams" && method === "GET") {
@@ -3487,7 +3487,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const origin = body.origine;
       const status = body.statut;
       const requestId = typeof body.request_id === "string" ? body.request_id : "";
-      const visitId = typeof body.visite_id === "string" ? body.visite_id : null;
+      const visitId = typeof body.visite_id === "string" && body.visite_id.trim() ? body.visite_id.trim() : null;
       const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if (!uuidPattern.test(pointVenteId) || !uuidPattern.test(requestId)) {
         return jsonError(400, "Point de vente ou référence de requête invalide");
