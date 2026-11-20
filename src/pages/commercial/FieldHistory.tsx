@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Clock, CheckCircle2, AlertTriangle, History, Store, TrendingUp, TrendingDown, Package, Satellite } from "lucide-react";
+import { ArrowLeft, MapPin, Clock, CheckCircle2, AlertTriangle, History, Store, TrendingUp, TrendingDown, Package, Satellite, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Visite } from "@/types";
 import { useAuth } from "@/lib/auth";
 import { formatDate, formatTime } from "@/lib/format";
+import { VenteAdditionnelleModal } from "@/components/VenteAdditionnelleModal";
 
 export function FieldHistory() {
   const { userType } = useAuth();
+  const [additionContext, setAdditionContext] = useState<{ visiteId: string; pointVenteId: string; pointVenteName: string } | null>(null);
   const navigate = useNavigate();
   const [visites, setVisites] = useState<Visite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +85,19 @@ export function FieldHistory() {
                         {v.accuracy != null && <span className="flex items-center gap-1"><Satellite size={12} />±{Math.round(v.accuracy)} m</span>}
                       </div>
                       {v.motif && <p className="text-xs text-error-500 mt-1.5">Motif : {v.motif}</p>}
+                      {userType === "commercial" && v.status === "confirmed" && (
+                        <button
+                          type="button"
+                          onClick={() => setAdditionContext({
+                            visiteId: v.id,
+                            pointVenteId: (v as Visite & { point_vente_id?: string }).point_vente_id || "",
+                            pointVenteName: v.point_vente?.name || "Point de vente",
+                          })}
+                          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-100"
+                        >
+                          <Plus size={15} /> Vente additionnelle
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -91,6 +106,15 @@ export function FieldHistory() {
           </div>
         )}
       </main>
+      {additionContext && additionContext.pointVenteId && (
+        <VenteAdditionnelleModal
+          pointVenteId={additionContext.pointVenteId}
+          pointVenteName={additionContext.pointVenteName}
+          visiteId={additionContext.visiteId}
+          source="mes_visites"
+          onClose={() => setAdditionContext(null)}
+        />
+      )}
     </div>
   );
 }
