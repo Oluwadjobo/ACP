@@ -440,6 +440,17 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  createVenteAdditionnelle: (body: {
+    point_vente_id: string;
+    visite_id?: string;
+    origine: "mes_visites" | "mes_points_vente";
+    statut: "realisee" | "non_realisee";
+    request_id: string;
+  }) => apiRequest<{ id: string; created_at: string; statut: string; origine: string }>("/ventes-additionnelles", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+
   createPromesse: (body: {
     visite_id: string;
     point_vente_id: string;
