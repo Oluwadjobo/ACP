@@ -373,6 +373,7 @@ export type VenteStatus =
 
 export interface Visite {
   id: string;
+  point_vente_id?: string;
   visited_at: string;
   latitude: number;
   longitude: number;
