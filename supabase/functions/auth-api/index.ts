@@ -3736,7 +3736,7 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- MY VISITES ---
     if (path === "/mes-visites" && method === "GET") {
       const denied = requirePermission("view_history"); if (denied) return denied;
-      let query = supabase.from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role, point_vente:points_vente(name, city, address)`).order("visited_at", { ascending: false });
+      let query = supabase.from("visites").select(`id, point_vente_id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role, point_vente:points_vente(name, city, address)`).order("visited_at", { ascending: false });
       if (userRole === "commercial") query = query.eq("commercial_id", userId); else query = query.eq("superviseur_id", userId);
       if (userTeamId) query = query.eq("team_id", userTeamId);
       const { data, error } = await query;
