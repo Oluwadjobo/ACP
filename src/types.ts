@@ -22,6 +22,23 @@ export interface DailyReportRow {
   total: number;
 }
 
+export interface DailyAdditionalSalesRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  sale_additional_realized: number;
+  sale_additional_not_realized: number;
+  total: number;
+}
+
+export interface DailyAdditionalSalesData {
+  rows: DailyAdditionalSalesRow[];
+  totals: {
+    sale_additional_realized: number;
+    sale_additional_not_realized: number;
+    total: number;
+  };
+}
+
 export interface DailyReportTotals {
   out_of_zone: number;
   presence_confirmed: number;
@@ -54,6 +71,7 @@ export interface DailyReportSnapshot {
   generated_at: string;
   generated_by: string;
   generated_by_name: string;
+  additional_sales_data?: DailyAdditionalSalesData | null;
 }
 
 export interface DailyReportAuditEntry {
