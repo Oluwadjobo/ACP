@@ -90,7 +90,7 @@ export function FieldHistory() {
                           type="button"
                           onClick={() => setAdditionContext({
                             visiteId: v.id,
-                            pointVenteId: (v as Visite & { point_vente_id?: string }).point_vente_id || "",
+                            pointVenteId: v.point_vente_id || "",
                             pointVenteName: v.point_vente?.name || "Point de vente",
                           })}
                           className="mt-3 inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-100"
