@@ -1429,6 +1429,11 @@ async function handleRoute(req: Request): Promise<Response> {
           console.error("additional sales snapshot persistence failed after regeneration", error);
           return jsonError(500, error instanceof Error ? error.message : "Impossible d'intégrer les ventes additionnelles au rapport régénéré");
         }
+        const { error: auditUpdateError } = await supabase.from("daily_report_regeneration_audit")
+          .update({ replacement_snapshot: snapshot })
+          .eq("report_id", snapshot.id)
+          .eq("replacement_version", snapshot.version);
+        if (auditUpdateError) console.error("additional sales regeneration audit update failed", auditUpdateError);
         return jsonResponse(snapshot);
       }
 
