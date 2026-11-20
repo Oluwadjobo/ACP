@@ -321,6 +321,13 @@ function drawComparisonSummary(
   return tableY + 60;
 }
 
+function reportRowCount(snapshot: DailyReportSnapshot): number {
+  return new Set([
+    ...snapshot.report_data.rows.map((row) => row.commercial_id),
+    ...(snapshot.additional_sales_data?.rows ?? []).map((row) => row.commercial_id),
+  ]).size;
+}
+
 function downloadJpg(canvas: HTMLCanvasElement, fileName: string): void {
   const url = canvas.toDataURL("image/jpeg", 0.9);
   const link = document.createElement("a");
@@ -333,7 +340,7 @@ export function exportDailyReportJpg(options: DailyImageOptions): void {
   if (options.comparison) {
     const { dateA, dateB, snapshotA, snapshotB, analyticalComment } = options.comparison;
     if (!snapshotA || !snapshotB) throw new Error("Les deux instantanés sont requis pour exporter la comparaison.");
-    const height = 1400 + snapshotA.report_data.rows.length * ROW_HEIGHT + snapshotB.report_data.rows.length * ROW_HEIGHT;
+    const height = 1400 + reportRowCount(snapshotA) * ROW_HEIGHT + reportRowCount(snapshotB) * ROW_HEIGHT;
     const { canvas, ctx } = newCanvas(height);
     let y = drawHeader(ctx, options.teamName, `Comparaison du ${formatDate(dateA)} au ${formatDate(dateB)}`);
     y = drawComparisonSummary(ctx, y, dateA, dateB, snapshotA, snapshotB, analyticalComment);
@@ -345,7 +352,7 @@ export function exportDailyReportJpg(options: DailyImageOptions): void {
 
   const snapshot = options.snapshot;
   if (!snapshot) throw new Error("Aucun instantané à exporter.");
-  const height = 650 + snapshot.report_data.rows.length * ROW_HEIGHT;
+  const height = 650 + reportRowCount(snapshot) * ROW_HEIGHT;
   const { canvas, ctx } = newCanvas(height);
   let y = drawHeader(ctx, options.teamName, `Rapport du ${formatDate(snapshot.report_date)}`);
   y = drawSummary(ctx, y, snapshot);
