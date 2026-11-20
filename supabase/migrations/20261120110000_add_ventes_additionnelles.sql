@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS public.ventes_additionnelles (
   team_id uuid NOT NULL REFERENCES public.teams(id) ON DELETE CASCADE,
   commercial_id uuid NOT NULL REFERENCES public.commerciaux(id) ON DELETE CASCADE,
   point_vente_id uuid NOT NULL REFERENCES public.points_vente(id) ON DELETE CASCADE,
-  visite_id uuid REFERENCES public.visites(id) ON DELETE SET NULL,
+  visite_id uuid REFERENCES public.visites(id) ON DELETE CASCADE,
   origine text NOT NULL CHECK (origine IN ('mes_visites', 'mes_points_vente')),
   statut text NOT NULL CHECK (statut IN ('realisee', 'non_realisee')),
   request_id uuid NOT NULL UNIQUE,
