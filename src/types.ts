@@ -364,6 +364,7 @@ export interface Visite {
   vente_status: VenteStatus | null;
   motif: string | null;
   user_role: "commercial" | "superviseur";
+  point_vente_id?: string;
   commercial?: { full_name: string };
   superviseur?: { full_name: string };
   point_vente?: { name: string; city: string; address?: string };

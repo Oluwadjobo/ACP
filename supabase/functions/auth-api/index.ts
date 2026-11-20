@@ -30,7 +30,7 @@ const SESSION_TTL_HOURS = 12;
 const DOUBLE_SCAN_MINUTES = 5;
 
 const MAX_GPS_ACCURACY_METERS = 15;
-const MAX_GEOLOCATION_GPS_ACCURACY_METERS = 30;
+const MAX_GEOLOCATION_GPS_ACCURACY_METERS = 25;
 
 const VENTE_NON_REALISEE_MOTIFS = [
   "Rupture de stock",
@@ -556,6 +556,17 @@ function portoNovoMidnight(date: string): Date {
   const part = (name: string) => Number(parts.find((item) => item.type === name)?.value);
   const representedAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
   return new Date(utcGuess - (representedAsUtc - utcGuess));
+}
+
+function todayInPortoNovo(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Porto-Novo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
 function classifyDailyReportVisit(visit: { status: string | null; vente_status: string | null }): keyof Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation" | "total"> | null {
@@ -2505,7 +2516,8 @@ async function handleRoute(req: Request): Promise<Response> {
       if (startDateParam && !ISO_DATE.test(startDateParam)) return jsonError(400, "Date de début invalide");
       if (endDateParam && !ISO_DATE.test(endDateParam)) return jsonError(400, "Date de fin invalide");
       if (startDateParam && endDateParam && startDateParam > endDateParam) return jsonError(400, "La date de début doit précéder la date de fin");
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      // Default dashboard dates follow the business timezone, not the Edge Runtime timezone.
+      const todayStart = portoNovoMidnight(todayInPortoNovo());
       const periodStart = startDateParam ? new Date(`${startDateParam}T00:00:00`) : todayStart;
       const periodEndExclusive = endDateParam ? new Date(new Date(`${endDateParam}T00:00:00`).getTime() + 86_400_000) : null;
       const todayIso = periodStart.toISOString();
@@ -3486,31 +3498,116 @@ async function handleRoute(req: Request): Promise<Response> {
     // --- CREATE PROMESSE D'ACHAT (superviseur only) ---
     if (path === "/promesses" && method === "POST" && userRole === "superviseur") {
       const denied = requirePermission("create_promesse"); if (denied) return denied;
-      const { visite_id, point_vente_id: bodyPointVenteId, produits, quantite, date_previsionnelle, montant_estime, responsable, observations } = await req.json();
-      if (!visite_id || !bodyPointVenteId || !produits) return jsonError(400, "Visite, point de vente et produits requis");
-      let visQuery = supabase.from("visites").select("id, status, vente_status, point_vente_id").eq("id", visite_id).eq("superviseur_id", userId);
+      const {
+        visite_id,
+        point_vente_id: bodyPointVenteId,
+        produits,
+        quantite,
+        date_previsionnelle,
+        montant_estime,
+        responsable,
+        observations,
+      } = await req.json();
+
+      if (typeof visite_id !== "string" || !visite_id
+        || typeof bodyPointVenteId !== "string" || !bodyPointVenteId
+        || !Array.isArray(produits)) {
+        return jsonError(400, "Visite, point de vente et liste de produits requis");
+      }
+      const productNames = produits
+        .filter((product: unknown): product is string => typeof product === "string")
+        .map((product: string) => product.trim())
+        .filter(Boolean);
+      if (productNames.length === 0 || productNames.length !== produits.length) {
+        return jsonError(400, "Sélectionnez au moins un produit valide");
+      }
+      const quantity = quantite == null ? 1 : Number(quantite);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return jsonError(400, "La quantité doit être un entier supérieur ou égal à 1");
+      }
+      const amount = montant_estime == null || montant_estime === "" ? null : Number(montant_estime);
+      if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+        return jsonError(400, "Le montant estimé est invalide");
+      }
+      if (date_previsionnelle != null && date_previsionnelle !== ""
+        && (typeof date_previsionnelle !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date_previsionnelle)
+          || !Number.isFinite(Date.parse(`${date_previsionnelle}T00:00:00.000Z`))
+          || new Date(`${date_previsionnelle}T00:00:00.000Z`).toISOString().slice(0, 10) !== date_previsionnelle)) {
+        return jsonError(400, "La date prévisionnelle est invalide");
+      }
+      if (responsable != null && typeof responsable !== "string") return jsonError(400, "Le responsable est invalide");
+      if (observations != null && typeof observations !== "string") return jsonError(400, "Les observations sont invalides");
+
+      let visQuery = supabase.from("visites")
+        .select("id, status, vente_status, point_vente_id")
+        .eq("id", visite_id)
+        .eq("superviseur_id", userId);
       if (userTeamId) visQuery = visQuery.eq("team_id", userTeamId);
-      const { data: visite } = await visQuery.maybeSingle();
+      const { data: visite, error: visiteError } = await visQuery.maybeSingle();
+      if (visiteError) return jsonError(500, "Erreur lors de la vérification de la visite");
       if (!visite) return jsonError(404, "Visite introuvable");
       if (visite.status !== "confirmed") return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
       if (visite.vente_status !== "confirmed") return jsonError(409, "Cette visite a déjà été finalisée.");
+
       // The promise is filed against the visited point de vente, not one named by the caller.
       const point_vente_id = String(visite.point_vente_id);
-      if (String(bodyPointVenteId) !== point_vente_id) {
+      if (bodyPointVenteId !== point_vente_id) {
         return jsonError(409, "Ce point de vente ne correspond pas à celui de la visite.");
       }
-      await supabase.from("visites").update({ vente_status: "promesse_achat" })
-        .eq("id", visite_id).eq("status", "confirmed").eq("vente_status", "confirmed");
+
+      const { data: existingPromise, error: existingPromiseError } = await supabase
+        .from("promesses_achat").select("id").eq("visite_id", visite_id).maybeSingle();
+      if (existingPromiseError) return jsonError(500, "Erreur lors de la vérification des promesses existantes");
+      if (existingPromise) return jsonError(409, "Une promesse d'achat existe déjà pour cette visite.");
+
+      // Claim the visit with a conditional update so concurrent requests cannot create two promises.
+      let claimQuery = supabase.from("visites").update({ vente_status: "promesse_achat" })
+        .eq("id", visite_id)
+        .eq("superviseur_id", userId)
+        .eq("status", "confirmed")
+        .eq("vente_status", "confirmed");
+      if (userTeamId) claimQuery = claimQuery.eq("team_id", userTeamId);
+      const { data: claimedVisit, error: claimError } = await claimQuery.select("id").maybeSingle();
+      if (claimError) return jsonError(500, "Erreur lors de la réservation de cette visite pour la promesse");
+      if (!claimedVisit) return jsonError(409, "Cette visite vient déjà d'être finalisée. Actualisez la liste.");
+
       const insertData: Record<string, unknown> = {
-        visite_id, superviseur_id: userId, point_vente_id,
-        produits: Array.isArray(produits) ? produits.join(", ") : produits.trim(),
-        quantite: Number(quantite) || 1, date_previsionnelle: date_previsionnelle || null,
-        montant_estime: montant_estime ? Number(montant_estime) : null,
-        responsable: responsable?.trim() || null, observations: observations?.trim() || null,
+        visite_id,
+        superviseur_id: userId,
+        point_vente_id,
+        produits: productNames.join(", "),
+        quantite: quantity,
+        date_previsionnelle: date_previsionnelle || null,
+        montant_estime: amount,
+        responsable: typeof responsable === "string" ? responsable.trim() || null : null,
+        observations: typeof observations === "string" ? observations.trim() || null : null,
       };
       if (userTeamId) insertData.team_id = userTeamId;
-      const { data, error } = await supabase.from("promesses_achat").insert(insertData).select("id, created_at").maybeSingle();
-      if (error) return jsonError(500, "Erreur lors de l'enregistrement de la promesse");
+      const { data, error } = await supabase.from("promesses_achat")
+        .insert(insertData).select("id, created_at").maybeSingle();
+      if (error || !data) {
+        // Distinguish a committed insert with a lost response from a genuine insert failure.
+        const { data: persistedPromise, error: lookupError } = await supabase
+          .from("promesses_achat").select("id, created_at").eq("visite_id", visite_id).maybeSingle();
+        if (persistedPromise) return jsonResponse(persistedPromise, 201);
+        if (lookupError) {
+          console.error("promise insert status could not be verified", { error, lookupError });
+          return jsonError(500, "L'enregistrement de la promesse n'a pas pu être vérifié. Contactez l'administrateur avant de réessayer.");
+        }
+        let rollbackQuery = supabase.from("visites").update({ vente_status: "confirmed" })
+          .eq("id", visite_id)
+          .eq("superviseur_id", userId)
+          .eq("status", "confirmed")
+          .eq("vente_status", "promesse_achat");
+        if (userTeamId) rollbackQuery = rollbackQuery.eq("team_id", userTeamId);
+        const { error: rollbackError } = await rollbackQuery;
+        if (rollbackError) {
+          console.error("promise insert failed and visit rollback failed", { error, rollbackError });
+          return jsonError(500, "La promesse n'a pas été enregistrée et le statut de la visite n'a pas pu être restauré. Contactez l'administrateur.");
+        }
+        console.error("promise insert failed; visit status restored", error);
+        return jsonError(500, "Erreur lors de l'enregistrement de la promesse. Vous pouvez réessayer.");
+      }
       return jsonResponse(data, 201);
     }
 
@@ -3527,10 +3624,18 @@ async function handleRoute(req: Request): Promise<Response> {
       // A control may only be attached to a visit the caller actually made.
       let linkedVisiteId: string | null = null;
       if (visite_id) {
-        let visCheck = supabase.from("visites").select("id").eq("id", visite_id).eq("superviseur_id", userId);
+        let visCheck = supabase.from("visites")
+          .select("id, point_vente_id, status")
+          .eq("id", visite_id)
+          .eq("superviseur_id", userId);
         if (userTeamId) visCheck = visCheck.eq("team_id", userTeamId);
-        const { data: ownVisite } = await visCheck.maybeSingle();
+        const { data: ownVisite, error: visiteError } = await visCheck.maybeSingle();
+        if (visiteError) return jsonError(500, "Erreur lors de la vérification de la visite liée");
         if (!ownVisite) return jsonError(404, "Visite introuvable");
+        if (ownVisite.status !== "confirmed") return jsonError(409, "Un contrôle ne peut être lié qu'à une présence confirmée.");
+        if (String(ownVisite.point_vente_id) !== String(point_vente_id)) {
+          return jsonError(409, "Le point de vente ne correspond pas à celui de la visite liée.");
+        }
         linkedVisiteId = String(ownVisite.id);
       }
       const secteur_id = pvExists.secteur_id || await getSuperviseurSecteur(userId, userTeamId);
@@ -3591,7 +3696,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (!commerciaux || commerciaux.length === 0) return jsonResponse([]);
       const commIds = commerciaux.map((c: Record<string, unknown>) => c.id);
       let query = supabase
-        .from("visites").select(`id, visited_at, motif, user_role, commercial:commerciaux(full_name), point_vente:points_vente(name, city, address)`)
+        .from("visites").select(`id, point_vente_id, visited_at, motif, user_role, commercial:commerciaux(full_name), point_vente:points_vente(name, city, address)`)
         .in("commercial_id", commIds).eq("vente_status", "vente_non_realisee").order("visited_at", { ascending: false });
       if (userTeamId) query = query.eq("team_id", userTeamId);
       const { data, error } = await query;
@@ -4115,8 +4220,8 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonResponse({ status: "out_of_zone", distance, accuracy, visit, pointName: pv.name, message: `Vous êtes à ${distance.toFixed(2)} m du point de vente. Rapprochez-vous à ${MAX_VISIT_DISTANCE_METERS} m ou moins puis réessayez.`, debug: { userLat: latitude, userLon: longitude, pointName: pv.name } }, 200);
       }
 
-      // Only a confirmed visit blocks a new in-zone validation; an old out-of-zone attempt never does.
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      // Only a confirmed visit blocks a new in-zone validation; its daily window follows Benin local time.
+      const todayStart = portoNovoMidnight(todayInPortoNovo());
       let dupQuery = supabase.from("visites")
         .select("id, visited_at, status, vente_status, visit_method, latitude, longitude, accuracy, distance_meters")
         .eq("point_vente_id", point_vente_id).eq("team_id", userTeamId)

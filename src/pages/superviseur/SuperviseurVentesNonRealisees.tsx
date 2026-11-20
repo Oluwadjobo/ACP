@@ -41,9 +41,14 @@ export function SuperviseurVentesNonRealisees() {
     try {
       if (action === "promesse") {
         if (selectedProduits.length === 0) { setSubmitting(false); return; }
+        if (!selected.point_vente_id) {
+          showToast("error", "Le point de vente associé à cette visite est introuvable. Actualisez la liste.");
+          setSubmitting(false);
+          return;
+        }
         await api.createPromesse({
           visite_id: selected.id,
-          point_vente_id: selected.point_vente?.name ? (selected as unknown as Record<string, unknown>).point_vente_id as string : "",
+          point_vente_id: selected.point_vente_id,
           produits: selectedProduits,
           quantite,
           date_previsionnelle: datePrev || undefined,
