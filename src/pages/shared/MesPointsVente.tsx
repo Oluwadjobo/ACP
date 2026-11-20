@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo } from "react";
-import { Store, MapPin, Search, ChevronLeft, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package } from "lucide-react";
+import { Store, MapPin, Search, ChevronLeft, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { MesPointVente as MesPointVenteType } from "@/types";
 import { formatDate, formatPointVenteAddress } from "@/lib/format";
+import { VenteAdditionnelleModal } from "@/components/VenteAdditionnelleModal";
 
 export function MesPointsVente() {
   const { userType } = useAuth();
@@ -13,6 +14,7 @@ export function MesPointsVente() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<string>("all");
+  const [additionPoint, setAdditionPoint] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     api.mesPointsVente().then(setPoints).finally(() => setLoading(false));
@@ -120,6 +122,15 @@ export function MesPointsVente() {
                       {p.date_livraison && <span className="flex items-center gap-1"><Truck size={10} /> Livraison : {formatDate(p.date_livraison)}</span>}
                     </div>
 
+                    {userType === "commercial" && p.active !== false && (
+                      <button
+                        type="button"
+                        onClick={() => setAdditionPoint({ id: p.id, name: p.name })}
+                        className="mt-3 inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-100"
+                      >
+                        <Plus size={15} /> Vente additionnelle
+                      </button>
+                    )}
                     <div className="flex items-center gap-3 mt-2">
                       {p.telephone && (
                         <a href={`tel:${p.telephone}`} className="flex items-center gap-1 text-[10px] text-primary-600"><Phone size={11} /> {p.telephone}</a>
@@ -135,6 +146,14 @@ export function MesPointsVente() {
           })
         )}
       </main>
+      {additionPoint && (
+        <VenteAdditionnelleModal
+          pointVenteId={additionPoint.id}
+          pointVenteName={additionPoint.name}
+          source="mes_points_vente"
+          onClose={() => setAdditionPoint(null)}
+        />
+      )}
     </div>
   );
 }
