@@ -12,6 +12,8 @@ const REPORT_COLUMNS = [
   "Présence confirmée",
   "Vente non réalisée",
   "Vente réalisée",
+  "Vente additionnelle réalisée",
+  "Vente additionnelle non réalisée",
   "Total général",
 ] as const;
 
@@ -61,9 +63,32 @@ function percentChange(base: number, current: number): string {
 
 function ReportTable({ snapshot }: { snapshot: DailyReportSnapshot }) {
   const totals = snapshot.report_data.totals;
+  const additional = snapshot.additional_sales_data;
+  const additionalTotals = additional?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+  const rowMap = new Map(snapshot.report_data.rows.map((row) => [row.commercial_id, { ...row }]));
+  for (const addition of additional?.rows ?? []) {
+    const row = rowMap.get(addition.commercial_id);
+    if (row) continue;
+    rowMap.set(addition.commercial_id, {
+      commercial_id: addition.commercial_id,
+      commercial_name_at_generation: addition.commercial_name_at_generation,
+      out_of_zone: 0,
+      presence_confirmed: 0,
+      sale_not_realized: 0,
+      sale_realized: 0,
+      total: 0,
+    });
+  }
+  const rows = [...rowMap.values()].sort((a, b) => {
+    const totalA = a.total + (additional?.rows.find((r) => r.commercial_id === a.commercial_id)?.total ?? 0);
+    const totalB = b.total + (additional?.rows.find((r) => r.commercial_id === b.commercial_id)?.total ?? 0);
+    return totalB - totalA || a.commercial_name_at_generation.localeCompare(b.commercial_name_at_generation, "fr");
+  });
+  const additionByCommercial = new Map((additional?.rows ?? []).map((row) => [row.commercial_id, row]));
+  const totalGeneral = totals.total + additionalTotals.total;
   return (
     <div className="overflow-x-auto rounded-xl border border-gray-200">
-      <table className="min-w-[880px] w-full border-collapse text-sm">
+      <table className="min-w-[1120px] w-full border-collapse text-sm">
         <thead className="bg-primary-900 text-white">
           <tr>
             {REPORT_COLUMNS.map((column, index) => (
@@ -72,17 +97,22 @@ function ReportTable({ snapshot }: { snapshot: DailyReportSnapshot }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 bg-white">
-          {snapshot.report_data.rows.length ? snapshot.report_data.rows.map((row) => (
-            <tr key={row.commercial_id} className="hover:bg-gray-50">
-              <td className="px-3 py-2.5 font-medium text-gray-900">{row.commercial_name_at_generation}</td>
-              <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.out_of_zone)}</td>
-              <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.presence_confirmed)}</td>
-              <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.sale_not_realized)}</td>
-              <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.sale_realized)}</td>
-              <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{displayCount(row.total)}</td>
-            </tr>
-          )) : (
-            <tr><td className="px-3 py-5 text-center text-gray-500" colSpan={6}>Aucune visite comptabilisable pour cette journée.</td></tr>
+          {rows.length ? rows.map((row) => {
+            const addition = additionByCommercial.get(row.commercial_id);
+            return (
+              <tr key={row.commercial_id} className="hover:bg-gray-50">
+                <td className="px-3 py-2.5 font-medium text-gray-900">{row.commercial_name_at_generation}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.out_of_zone)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.presence_confirmed)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.sale_not_realized)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(row.sale_realized)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(addition?.sale_additional_realized ?? 0)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{displayCount(addition?.sale_additional_not_realized ?? 0)}</td>
+                <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{displayCount(row.total + (addition?.total ?? 0))}</td>
+              </tr>
+            );
+          }) : (
+            <tr><td className="px-3 py-5 text-center text-gray-500" colSpan={8}>Aucune visite ni vente additionnelle comptabilisable pour cette journée.</td></tr>
           )}
         </tbody>
         <tfoot className="bg-gray-100 font-bold text-gray-900">
@@ -92,7 +122,9 @@ function ReportTable({ snapshot }: { snapshot: DailyReportSnapshot }) {
             <td className="px-3 py-3 text-right tabular-nums">{displayCount(totals.presence_confirmed)}</td>
             <td className="px-3 py-3 text-right tabular-nums">{displayCount(totals.sale_not_realized)}</td>
             <td className="px-3 py-3 text-right tabular-nums">{displayCount(totals.sale_realized)}</td>
-            <td className="px-3 py-3 text-right tabular-nums">{displayCount(totals.total)}</td>
+            <td className="px-3 py-3 text-right tabular-nums">{displayCount(additionalTotals.sale_additional_realized)}</td>
+            <td className="px-3 py-3 text-right tabular-nums">{displayCount(additionalTotals.sale_additional_not_realized)}</td>
+            <td className="px-3 py-3 text-right tabular-nums">{displayCount(totalGeneral)}</td>
           </tr>
         </tfoot>
       </table>
@@ -105,7 +137,7 @@ function SnapshotSummary({ snapshot }: { snapshot: DailyReportSnapshot }) {
     <div className="grid gap-3 sm:grid-cols-3">
       <div className="rounded-xl border border-gray-200 bg-white p-4">
         <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total général</p>
-        <p className="mt-1 text-2xl font-bold text-gray-900">{snapshot.total_general.toLocaleString("fr-FR")}</p>
+        <p className="mt-1 text-2xl font-bold text-gray-900">{(snapshot.report_data.totals.total + (snapshot.additional_sales_data?.totals.total ?? 0)).toLocaleString("fr-FR")}</p>
       </div>
       <div className="rounded-xl border border-gray-200 bg-white p-4">
         <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Taux de conversion</p>
@@ -281,11 +313,18 @@ export function AdminDailyReports() {
     const a = comparison?.date_a.snapshot;
     const b = comparison?.date_b.snapshot;
     if (!a || !b) return [];
-    return REPORT_METRICS.map((metric) => {
-      const first = a.report_data.totals[metric.key];
-      const second = b.report_data.totals[metric.key];
-      return { label: metric.label, first, second, difference: second - first, percent: percentChange(first, second) };
+    const additionalA = a.additional_sales_data?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+    const additionalB = b.additional_sales_data?.totals ?? { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 };
+    const baseRows = REPORT_METRICS.map((metric) => {
+      const first = metric.key === "total" ? a.report_data.totals.total + additionalA.total : a.report_data.totals[metric.key];
+      const second = metric.key === "total" ? b.report_data.totals.total + additionalB.total : b.report_data.totals[metric.key];
+      return { label: metric.key === "total" ? "Total général" : metric.label, first, second, difference: second - first, percent: percentChange(first, second) };
     });
+    const additionRows = [
+      { label: "Vente additionnelle réalisée", first: additionalA.sale_additional_realized, second: additionalB.sale_additional_realized },
+      { label: "Vente additionnelle non réalisée", first: additionalA.sale_additional_not_realized, second: additionalB.sale_additional_not_realized },
+    ].map((row) => ({ ...row, difference: row.second - row.first, percent: percentChange(row.first, row.second) }));
+    return [...baseRows, ...additionRows];
   }, [comparison]);
 
   return (
