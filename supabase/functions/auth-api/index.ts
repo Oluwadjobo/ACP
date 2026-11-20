@@ -534,6 +534,23 @@ interface DailyReportData {
   totals: Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation">;
 }
 
+interface DailyAdditionalSalesRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  sale_additional_realized: number;
+  sale_additional_not_realized: number;
+  total: number;
+}
+
+interface DailyAdditionalSalesData {
+  rows: DailyAdditionalSalesRow[];
+  totals: {
+    sale_additional_realized: number;
+    sale_additional_not_realized: number;
+    total: number;
+  };
+}
+
 function isIsoReportDate(value: string | null): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -632,6 +649,97 @@ async function buildDailyReportData(teamId: string, reportDate: string): Promise
   }), { out_of_zone: 0, presence_confirmed: 0, sale_not_realized: 0, sale_realized: 0, total: 0 });
 
   return { columns: DAILY_REPORT_COLUMNS, rows, totals };
+}
+
+async function buildDailyAdditionalSalesData(teamId: string, reportDate: string): Promise<DailyAdditionalSalesData> {
+  const start = portoNovoMidnight(reportDate);
+  const nextDate = new Date(Date.parse(`${reportDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+  const end = portoNovoMidnight(nextDate);
+  const result = await fetchAllRows((from, to) => supabase
+    .from("ventes_additionnelles")
+    .select("id, commercial_id, statut, created_at", { count: "exact" })
+    .eq("team_id", teamId)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (result.error) throw new Error("Impossible de lire les ventes additionnelles de la journée");
+
+  const commercialIds = [...new Set(result.data
+    .map((item) => item.commercial_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0))];
+  const profiles = commercialIds.length
+    ? await fetchRowsForIds(commercialIds, (batch, from, to) => supabase
+      .from("commerciaux")
+      .select("id, full_name")
+      .in("id", batch)
+      .order("id", { ascending: true })
+      .range(from, to))
+    : { data: [], error: null };
+  if (profiles.error) throw new Error("Impossible de vérifier les commerciaux des ventes additionnelles");
+
+  const names = new Map((profiles.data as { id: string; full_name: string | null }[])
+    .filter((item) => typeof item.full_name === "string" && item.full_name.trim().length > 0)
+    .map((item) => [item.id, item.full_name!.trim()]));
+  const grouped = new Map<string, DailyAdditionalSalesRow>();
+  for (const item of result.data as { commercial_id: string; statut: string }[]) {
+    const commercialId = item.commercial_id;
+    const name = names.get(commercialId);
+    if (!name) continue;
+    let row = grouped.get(commercialId);
+    if (!row) {
+      row = {
+        commercial_id: commercialId,
+        commercial_name_at_generation: name,
+        sale_additional_realized: 0,
+        sale_additional_not_realized: 0,
+        total: 0,
+      };
+      grouped.set(commercialId, row);
+    }
+    if (item.statut === "realisee") row.sale_additional_realized += 1;
+    else if (item.statut === "non_realisee") row.sale_additional_not_realized += 1;
+    else continue;
+    row.total += 1;
+  }
+
+  const rows = [...grouped.values()].sort((a, b) =>
+    b.total - a.total || a.commercial_name_at_generation.localeCompare(b.commercial_name_at_generation, "fr")
+  );
+  const totals = rows.reduce((acc, row) => ({
+    sale_additional_realized: acc.sale_additional_realized + row.sale_additional_realized,
+    sale_additional_not_realized: acc.sale_additional_not_realized + row.sale_additional_not_realized,
+    total: acc.total + row.total,
+  }), { sale_additional_realized: 0, sale_additional_not_realized: 0, total: 0 });
+  return { rows, totals };
+}
+
+async function persistDailyAdditionalSalesSnapshot(
+  snapshotId: string,
+  reportData: DailyReportData,
+  additionalData: DailyAdditionalSalesData,
+  teamName: string,
+  reportDate: string,
+) {
+  const totalGeneral = reportData.totals.total + additionalData.totals.total;
+  const baseComment = dailyReportComment(teamName, reportDate, reportData);
+  const additionComment = `${additionalData.totals.sale_additional_realized} vente(s) additionnelle(s) réalisée(s) et ${additionalData.totals.sale_additional_not_realized} non réalisée(s).`;
+  const comment = `${baseComment} ${additionComment} Le taux de conversion reste calculé sur les visites physiques uniquement.`;
+  const { data, error } = await supabase.from("daily_report_snapshots")
+    .update({
+      additional_sales_data: additionalData,
+      total_general: totalGeneral,
+      analytical_comment: comment,
+    })
+    .eq("id", snapshotId)
+    .select("*")
+    .single();
+  if (error || !data) {
+    console.error("daily additional sales snapshot update failed", error);
+    throw new Error("L'instantané existe, mais ses ventes additionnelles n'ont pas pu être intégrées. Régénérez le rapport après vérification.");
+  }
+  return data;
 }
 
 function dailyReportConversion(data: DailyReportData): number {
@@ -1249,11 +1357,15 @@ async function handleRoute(req: Request): Promise<Response> {
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
         let reportData: DailyReportData;
+        let additionalSalesData: DailyAdditionalSalesData;
         try {
-          reportData = await buildDailyReportData(teamId, date);
+          [reportData, additionalSalesData] = await Promise.all([
+            buildDailyReportData(teamId, date),
+            buildDailyAdditionalSalesData(teamId, date),
+          ]);
         } catch (error) {
           console.error("daily report calculation failed", error);
-          return jsonError(500, "Impossible de calculer le rapport à partir des visites");
+          return jsonError(500, "Impossible de calculer les visites et ventes additionnelles de la journée");
         }
         const conversionRate = dailyReportConversion(reportData);
         const { data: snapshotId, error } = await supabase.rpc("create_daily_report_snapshot", {
@@ -1265,11 +1377,13 @@ async function handleRoute(req: Request): Promise<Response> {
           p_actor_admin_id: session.user_id,
         });
         if (error) return dailyReportRpcError(error);
-        const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
-          .select("*")
-          .eq("id", snapshotId)
-          .single();
-        if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été créé mais ne peut pas être relu");
+        let snapshot;
+        try {
+          snapshot = await persistDailyAdditionalSalesSnapshot(String(snapshotId), reportData, additionalSalesData, team.name, date);
+        } catch (error) {
+          console.error("additional sales snapshot persistence failed", error);
+          return jsonError(500, error instanceof Error ? error.message : "Impossible d'intégrer les ventes additionnelles au rapport");
+        }
         return jsonResponse(snapshot, 201);
       }
 
@@ -1287,11 +1401,15 @@ async function handleRoute(req: Request): Promise<Response> {
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
         let reportData: DailyReportData;
+        let additionalSalesData: DailyAdditionalSalesData;
         try {
-          reportData = await buildDailyReportData(teamId, date);
+          [reportData, additionalSalesData] = await Promise.all([
+            buildDailyReportData(teamId, date),
+            buildDailyAdditionalSalesData(teamId, date),
+          ]);
         } catch (error) {
           console.error("daily report recalculation failed", error);
-          return jsonError(500, "Impossible de recalculer le rapport à partir des visites");
+          return jsonError(500, "Impossible de recalculer les visites et ventes additionnelles");
         }
         const { data: snapshotId, error } = await supabase.rpc("regenerate_daily_report_snapshot", {
           p_team_id: teamId,
@@ -1304,11 +1422,13 @@ async function handleRoute(req: Request): Promise<Response> {
           p_confirmed: true,
         });
         if (error) return dailyReportRpcError(error);
-        const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
-          .select("*")
-          .eq("id", snapshotId)
-          .single();
-        if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été régénéré mais ne peut pas être relu");
+        let snapshot;
+        try {
+          snapshot = await persistDailyAdditionalSalesSnapshot(String(snapshotId), reportData, additionalSalesData, team.name, date);
+        } catch (error) {
+          console.error("additional sales snapshot persistence failed after regeneration", error);
+          return jsonError(500, error instanceof Error ? error.message : "Impossible d'intégrer les ventes additionnelles au rapport régénéré");
+        }
         return jsonResponse(snapshot);
       }
 
@@ -3355,6 +3475,99 @@ async function handleRoute(req: Request): Promise<Response> {
         vente_status,
       });
     }
+    // --- CREATE ADDITIONAL SALE DECLARATION (commercial, no physical visit) ---
+    if (path === "/ventes-additionnelles" && method === "POST") {
+      if (userRole !== "commercial") return jsonError(403, "Cette action est réservée aux commerciaux");
+      const denied = requirePermission("record_vente"); if (denied) return denied;
+      if (!userTeamId) return jsonError(400, "Une équipe est requise pour déclarer une vente additionnelle");
+
+      const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+      if (!body) return jsonError(400, "Corps de requête invalide");
+      const pointVenteId = typeof body.point_vente_id === "string" ? body.point_vente_id : "";
+      const origin = body.origine;
+      const status = body.statut;
+      const requestId = typeof body.request_id === "string" ? body.request_id : "";
+      const visitId = typeof body.visite_id === "string" ? body.visite_id : null;
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidPattern.test(pointVenteId) || !uuidPattern.test(requestId)) {
+        return jsonError(400, "Point de vente ou référence de requête invalide");
+      }
+      if (origin !== "mes_visites" && origin !== "mes_points_vente") {
+        return jsonError(400, "Origine de déclaration invalide");
+      }
+      if (status !== "realisee" && status !== "non_realisee") {
+        return jsonError(400, "Statut de vente additionnelle invalide");
+      }
+      if (origin === "mes_visites" && (!visitId || !uuidPattern.test(visitId))) {
+        return jsonError(400, "La visite d'origine est requise");
+      }
+      if (origin === "mes_points_vente" && visitId) {
+        return jsonError(400, "Une vente depuis Mes points de vente ne doit pas être rattachée à une visite");
+      }
+
+      const { data: existing, error: existingError } = await supabase.from("ventes_additionnelles")
+        .select("id, team_id, commercial_id, point_vente_id, visite_id, origine, statut, request_id, created_at")
+        .eq("request_id", requestId)
+        .maybeSingle();
+      if (existingError) return jsonError(500, "Impossible de vérifier la déclaration précédente");
+      if (existing) {
+        if (existing.team_id !== userTeamId || existing.commercial_id !== userId ||
+            existing.point_vente_id !== pointVenteId || existing.origine !== origin ||
+            existing.statut !== status || (existing.visite_id ?? null) !== visitId) {
+          return jsonError(409, "Cette référence de requête a déjà été utilisée pour une autre déclaration");
+        }
+        return jsonResponse(existing);
+      }
+
+      if (origin === "mes_visites") {
+        let visitQuery = supabase.from("visites")
+          .select("id, point_vente_id, status")
+          .eq("id", visitId!)
+          .eq("commercial_id", userId)
+          .eq("team_id", userTeamId);
+        const { data: visit, error: visitError } = await visitQuery.maybeSingle();
+        if (visitError) return jsonError(500, "Impossible de vérifier la visite sélectionnée");
+        if (!visit) return jsonError(404, "Visite introuvable dans votre historique");
+        if (visit.status !== "confirmed") return jsonError(409, "Une visite hors zone ne peut pas servir de référence à une vente additionnelle");
+        if (visit.point_vente_id !== pointVenteId) return jsonError(409, "Le point de vente ne correspond pas à la visite sélectionnée");
+      } else {
+        const assigned = await getAssignedPOSForCommercial(userId, userTeamId, false);
+        if (assigned.error || !assigned.points) return jsonError(500, assigned.error || "Impossible de vérifier vos points de vente");
+        const point = (assigned.points as Record<string, unknown>[])
+          .find((item) => String(item.id) === pointVenteId);
+        if (!point || point.active === false) return jsonError(403, "Ce point de vente ne fait pas partie de vos tournées actives");
+      }
+
+      const insertData = {
+        team_id: userTeamId,
+        commercial_id: userId,
+        point_vente_id: pointVenteId,
+        visite_id: visitId,
+        origine: origin,
+        statut: status,
+        request_id: requestId,
+      };
+      const { data: created, error: insertError } = await supabase.from("ventes_additionnelles")
+        .insert(insertData)
+        .select("id, team_id, commercial_id, point_vente_id, visite_id, origine, statut, request_id, created_at")
+        .maybeSingle();
+      if (insertError?.code === "23505") {
+        const { data: retryExisting } = await supabase.from("ventes_additionnelles")
+          .select("id, team_id, commercial_id, point_vente_id, visite_id, origine, statut, request_id, created_at")
+          .eq("request_id", requestId)
+          .maybeSingle();
+        if (retryExisting && retryExisting.commercial_id === userId && retryExisting.team_id === userTeamId) {
+          return jsonResponse(retryExisting);
+        }
+        return jsonError(409, "Cette déclaration a déjà été enregistrée");
+      }
+      if (insertError || !created) {
+        console.error("additional sale insert failed", insertError);
+        return jsonError(500, "Impossible d'enregistrer la vente additionnelle");
+      }
+      return jsonResponse(created, 201);
+    }
+
     // --- CREATE VENTE (with multi-product lignes + auto BL) ---
     if (path === "/ventes" && method === "POST") {
       const denied = requirePermission("record_vente"); if (denied) return denied;
