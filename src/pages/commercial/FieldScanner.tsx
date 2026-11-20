@@ -256,7 +256,7 @@ export function FieldScanner() {
           visite_id: result.visit.id,
           point_vente_id: pointId,
           lignes: validLignes.map((l) => ({ produit_id: l.produit_id, produit_nom: l.produit_nom, quantite: l.quantite, observation: l.observation || undefined })),
-          livraison_immédiate: postAction === "vente_livraison",
+          livraison_immediate: postAction === "vente_livraison",
           observation: venteObservation || undefined,
         });
         if (res.bl_numero) setBlNumero(res.bl_numero);

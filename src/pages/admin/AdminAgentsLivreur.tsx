@@ -196,7 +196,7 @@ function AgentFormModal({ agent, commerciaux, onClose, onSaved }: {
   };
 
   return (
-    <Modal title={agent ? "Modifier l'agent" : "Créer un agent livreur"} onClose={onClose}>
+    <Modal open={true} title={agent ? "Modifier l'agent" : "Créer un agent livreur"} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <div className="rounded-lg bg-error-50 border border-error-200 px-3 py-2 text-sm text-error-700">{error}</div>}
 

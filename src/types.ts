@@ -610,6 +610,32 @@ export interface MesPointVente {
   date_livraison?: string | null;
 }
 
+export interface PdvGpsReport {
+  id: string;
+  point_vente_id: string;
+  reporter_role: "commercial" | "superviseur";
+  reporter_name: string | null;
+  pdv_latitude: number | null;
+  pdv_longitude: number | null;
+  device_latitude: number;
+  device_longitude: number;
+  device_accuracy: number | null;
+  distance_meters: number | null;
+  status: "open" | "resolved" | "dismissed";
+  attempt_count: number;
+  first_reported_at: string;
+  last_reported_at: string;
+  point_vente: {
+    code: string;
+    name: string;
+    address: string | null;
+    city: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    active: boolean;
+  } | null;
+}
+
 export interface VisitResult {
   status: "confirmed" | "out_of_zone" | "duplicate" | "poor_gps";
   distance?: number;
