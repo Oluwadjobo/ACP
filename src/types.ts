@@ -30,10 +30,32 @@ export interface DailyReportTotals {
   total: number;
 }
 
+export interface DailyReportPhoneRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  total: number;
+  sale_realized: number;
+  sale_not_realized: number;
+}
+
+export interface DailyReportPhoneTotals {
+  total: number;
+  sale_realized: number;
+  sale_not_realized: number;
+}
+
+export interface DailyReportPhoneData {
+  columns: ["Commercial", "Appels reçus", "Vente OUI", "Vente NON"];
+  rows: DailyReportPhoneRow[];
+  totals: DailyReportPhoneTotals;
+}
+
 export interface DailyReportData {
-  columns: ["Commercial", "Hors zone", "Présence confirmée", "Vente non réalisée", "Vente réalisée", "Total général"];
+  columns: ["Commercial", "Hors zone", "Présence confirmée", "Vente non réalisée", "Vente réalisée", "Total visites physiques"];
   rows: DailyReportRow[];
   totals: DailyReportTotals;
+  /** Absent dans les anciens instantanés créés avant le suivi des appels téléphoniques. */
+  telephone?: DailyReportPhoneData;
 }
 
 export interface DailyReportSnapshot {

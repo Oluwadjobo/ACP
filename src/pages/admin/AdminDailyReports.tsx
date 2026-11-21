@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CalendarDays, Download, FileImage, History, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 import { api } from "@/lib/api";
 import { exportDailyReportJpg } from "@/lib/dailyReportImage";
-import type { DailyReportAuditEntry, DailyReportSnapshot, DailyReportTotals, Team } from "@/types";
+import type { DailyReportAuditEntry, DailyReportPhoneTotals, DailyReportSnapshot, DailyReportTotals, Team } from "@/types";
 
 type ViewMode = "daily" | "comparison";
 
@@ -12,7 +12,7 @@ const REPORT_COLUMNS = [
   "Présence confirmée",
   "Vente non réalisée",
   "Vente réalisée",
-  "Total général",
+  "Total visites physiques",
 ] as const;
 
 const TEAM_NAMES: Record<string, string> = {
@@ -26,7 +26,7 @@ const REPORT_METRICS: { label: string; key: keyof DailyReportTotals }[] = [
   { label: "Présence confirmée", key: "presence_confirmed" },
   { label: "Vente non réalisée", key: "sale_not_realized" },
   { label: "Vente réalisée", key: "sale_realized" },
-  { label: "Total général", key: "total" },
+  { label: "Total visites physiques", key: "total" },
 ];
 
 function todayInPortoNovo(): string {
@@ -100,11 +100,80 @@ function ReportTable({ snapshot }: { snapshot: DailyReportSnapshot }) {
   );
 }
 
+function PhoneActivityTable({ snapshot }: { snapshot: DailyReportSnapshot }) {
+  const telephone = snapshot.report_data.telephone;
+  if (!telephone) {
+    return (
+      <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
+        <h3 className="font-semibold text-amber-950">Activité commerciale additionnelle — commandes par appel téléphonique</h3>
+        <p className="mt-1 text-sm text-amber-900">Les résultats téléphoniques n'étaient pas archivés dans cette ancienne version du rapport. Régénérez l'instantané courant pour intégrer les appels de cette journée. Les versions historiques restent inchangées.</p>
+      </section>
+    );
+  }
+
+  const totals = telephone.totals;
+  return (
+    <section className="space-y-4 rounded-2xl border border-sky-100 bg-sky-50/60 p-4 sm:p-5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-sky-800">Activité commerciale additionnelle</p>
+        <h3 className="mt-1 text-lg font-bold text-sky-950">Commandes par appel téléphonique</h3>
+        <p className="mt-1 text-sm text-sky-900">Résultats enregistrés sans déplacement. Ces appels ne sont pas comptabilisés comme des visites physiques.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-sky-100 bg-white p-3">
+          <p className="text-xs font-medium text-gray-500">Appels reçus</p>
+          <p className="mt-1 text-2xl font-bold text-gray-900">{totals.total.toLocaleString("fr-FR")}</p>
+        </div>
+        <div className="rounded-xl border border-emerald-100 bg-white p-3">
+          <p className="text-xs font-medium text-gray-500">Vente réalisée : OUI</p>
+          <p className="mt-1 text-2xl font-bold text-emerald-700">{totals.sale_realized.toLocaleString("fr-FR")}</p>
+        </div>
+        <div className="rounded-xl border border-rose-100 bg-white p-3">
+          <p className="text-xs font-medium text-gray-500">Vente réalisée : NON</p>
+          <p className="mt-1 text-2xl font-bold text-rose-700">{totals.sale_not_realized.toLocaleString("fr-FR")}</p>
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-sky-100 bg-white">
+        <table className="min-w-[650px] w-full border-collapse text-sm">
+          <thead className="bg-sky-900 text-white">
+            <tr>
+              <th className="px-3 py-3 text-left font-semibold">Commercial</th>
+              <th className="px-3 py-3 text-right font-semibold">Appels reçus</th>
+              <th className="px-3 py-3 text-right font-semibold">Vente OUI</th>
+              <th className="px-3 py-3 text-right font-semibold">Vente NON</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {telephone.rows.length ? telephone.rows.map((row) => (
+              <tr key={row.commercial_id}>
+                <td className="px-3 py-2.5 font-medium text-gray-900">{row.commercial_name_at_generation}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{row.total.toLocaleString("fr-FR")}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-emerald-700">{row.sale_realized.toLocaleString("fr-FR")}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-rose-700">{row.sale_not_realized.toLocaleString("fr-FR")}</td>
+              </tr>
+            )) : (
+              <tr><td className="px-3 py-5 text-center text-gray-500" colSpan={4}>Aucun appel téléphonique enregistré pour cette journée.</td></tr>
+            )}
+          </tbody>
+          <tfoot className="bg-sky-100 font-bold text-gray-900">
+            <tr>
+              <td className="px-3 py-3">TOTAL APPELS</td>
+              <td className="px-3 py-3 text-right tabular-nums">{totals.total.toLocaleString("fr-FR")}</td>
+              <td className="px-3 py-3 text-right tabular-nums">{totals.sale_realized.toLocaleString("fr-FR")}</td>
+              <td className="px-3 py-3 text-right tabular-nums">{totals.sale_not_realized.toLocaleString("fr-FR")}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function SnapshotSummary({ snapshot }: { snapshot: DailyReportSnapshot }) {
   return (
     <div className="grid gap-3 sm:grid-cols-3">
       <div className="rounded-xl border border-gray-200 bg-white p-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total général</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Total des visites physiques</p>
         <p className="mt-1 text-2xl font-bold text-gray-900">{snapshot.total_general.toLocaleString("fr-FR")}</p>
       </div>
       <div className="rounded-xl border border-gray-200 bg-white p-4">
@@ -288,6 +357,22 @@ export function AdminDailyReports() {
     });
   }, [comparison]);
 
+  const comparisonPhoneRows = useMemo(() => {
+    const a = comparison?.date_a.snapshot?.report_data.telephone?.totals;
+    const b = comparison?.date_b.snapshot?.report_data.telephone?.totals;
+    if (!a || !b) return null;
+    const metrics: { label: string; key: keyof DailyReportPhoneTotals }[] = [
+      { label: "Appels téléphoniques", key: "total" },
+      { label: "Appels — vente OUI", key: "sale_realized" },
+      { label: "Appels — vente NON", key: "sale_not_realized" },
+    ];
+    return metrics.map((metric) => {
+      const first = a[metric.key];
+      const second = b[metric.key];
+      return { label: metric.label, first, second, difference: second - first, percent: percentChange(first, second) };
+    });
+  }, [comparison]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -351,7 +436,7 @@ export function AdminDailyReports() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">{displayTeamName} · {formatReportDate(snapshot.report_date)}</h2>
-                <p className="mt-1 text-sm text-gray-500">Commerciaux triés par total général décroissant</p>
+                <p className="mt-1 text-sm text-gray-500">Commerciaux triés par total de visites physiques décroissant</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={exportJpg} className="btn-secondary inline-flex items-center gap-2"><FileImage size={16} /> Exporter JPG</button>
@@ -366,6 +451,7 @@ export function AdminDailyReports() {
               <p className="mt-1 text-sm leading-6 text-blue-900">{snapshot.analytical_comment}</p>
             </div>
             <ReportTable snapshot={snapshot} />
+            <PhoneActivityTable snapshot={snapshot} />
 
             <section className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
               <div className="mb-4 flex items-center gap-2">
@@ -385,6 +471,7 @@ export function AdminDailyReports() {
                         <div>
                           <p className="mb-2 text-sm font-semibold text-gray-700">Version {entry.previous_version} (archivée)</p>
                           <ReportTable snapshot={entry.previous_snapshot} />
+                          <div className="mt-3"><PhoneActivityTable snapshot={entry.previous_snapshot} /></div>
                         </div>
                         <p className="text-xs text-gray-500">Commentaire archivé : {entry.previous_snapshot.analytical_comment}</p>
                       </div>
@@ -436,6 +523,31 @@ export function AdminDailyReports() {
                 </table>
               </section>
 
+              <section className="overflow-x-auto rounded-2xl border border-sky-100 bg-sky-50/50 p-4 sm:p-5">
+                <h3 className="mb-1 font-semibold text-sky-950">Variations de l'activité commerciale par téléphone</h3>
+                <p className="mb-3 text-sm text-sky-900">Ces indicateurs sont comparés séparément des visites physiques.</p>
+                {comparisonPhoneRows ? (
+                  <table className="min-w-[650px] w-full text-sm">
+                    <thead><tr className="border-b border-sky-200 text-left text-gray-600">
+                      <th className="px-3 py-3">Catégorie</th><th className="px-3 py-3 text-right">{formatReportDate(dateA)}</th><th className="px-3 py-3 text-right">{formatReportDate(dateB)}</th><th className="px-3 py-3 text-right">Variation absolue</th><th className="px-3 py-3 text-right">Variation %</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-sky-100">
+                      {comparisonPhoneRows.map((row) => (
+                        <tr key={row.label}>
+                          <td className="px-3 py-3 font-medium text-gray-800">{row.label}</td>
+                          <td className="px-3 py-3 text-right tabular-nums">{row.first.toLocaleString("fr-FR")}</td>
+                          <td className="px-3 py-3 text-right tabular-nums">{row.second.toLocaleString("fr-FR")}</td>
+                          <td className={`px-3 py-3 text-right font-semibold tabular-nums ${row.difference > 0 ? "text-emerald-700" : row.difference < 0 ? "text-rose-700" : "text-gray-700"}`}>{row.difference > 0 ? "+" : ""}{row.difference.toLocaleString("fr-FR")}</td>
+                          <td className="px-3 py-3 text-right tabular-nums">{row.percent}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-sm text-amber-800">Les indicateurs téléphoniques ne sont pas archivés dans au moins un des deux instantanés. Régénérez les rapports concernés pour les comparer.</p>
+                )}
+              </section>
+
               <div className="grid gap-5 xl:grid-cols-2">
                 <section className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
@@ -443,6 +555,7 @@ export function AdminDailyReports() {
                     <span className="text-xs text-gray-500">Version {comparison.date_a.snapshot.version}</span>
                   </div>
                   <ReportTable snapshot={comparison.date_a.snapshot} />
+                  <PhoneActivityTable snapshot={comparison.date_a.snapshot} />
                 </section>
                 <section className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
@@ -450,6 +563,7 @@ export function AdminDailyReports() {
                     <span className="text-xs text-gray-500">Version {comparison.date_b.snapshot.version}</span>
                   </div>
                   <ReportTable snapshot={comparison.date_b.snapshot} />
+                  <PhoneActivityTable snapshot={comparison.date_b.snapshot} />
                 </section>
               </div>
             </>
@@ -461,8 +575,8 @@ export function AdminDailyReports() {
               ].filter((date): date is string => date !== null))].map((missingDate) => (
                 <div key={missingDate}>{renderMissingSnapshot(missingDate)}</div>
               ))}
-              {comparison.date_a.snapshot && <section className="space-y-3"><h3 className="font-semibold text-gray-900">{displayTeamName} · {formatReportDate(dateA)}</h3><ReportTable snapshot={comparison.date_a.snapshot} /></section>}
-              {comparison.date_b.snapshot && <section className="space-y-3"><h3 className="font-semibold text-gray-900">{displayTeamName} · {formatReportDate(dateB)}</h3><ReportTable snapshot={comparison.date_b.snapshot} /></section>}
+              {comparison.date_a.snapshot && <section className="space-y-3"><h3 className="font-semibold text-gray-900">{displayTeamName} · {formatReportDate(dateA)}</h3><ReportTable snapshot={comparison.date_a.snapshot} /><PhoneActivityTable snapshot={comparison.date_a.snapshot} /></section>}
+              {comparison.date_b.snapshot && <section className="space-y-3"><h3 className="font-semibold text-gray-900">{displayTeamName} · {formatReportDate(dateB)}</h3><ReportTable snapshot={comparison.date_b.snapshot} /><PhoneActivityTable snapshot={comparison.date_b.snapshot} /></section>}
             </div>
           )}
         </div>

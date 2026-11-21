@@ -514,7 +514,7 @@ const DAILY_REPORT_COLUMNS = [
   "Présence confirmée",
   "Vente non réalisée",
   "Vente réalisée",
-  "Total général",
+  "Total visites physiques",
 ];
 const DAILY_REPORT_TEAMS = ["EAU", "YAOURT", "OPLANETE"];
 
@@ -532,6 +532,20 @@ interface DailyReportData {
   columns: string[];
   rows: DailyReportRow[];
   totals: Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation">;
+}
+
+interface DailyReportPhoneRow {
+  commercial_id: string;
+  commercial_name_at_generation: string;
+  total: number;
+  sale_realized: number;
+  sale_not_realized: number;
+}
+
+interface DailyReportPhoneData {
+  columns: string[];
+  rows: DailyReportPhoneRow[];
+  totals: { total: number; sale_realized: number; sale_not_realized: number };
 }
 
 function isIsoReportDate(value: string | null): value is string {
@@ -645,6 +659,76 @@ async function buildDailyReportData(teamId: string, reportDate: string): Promise
   return { columns: DAILY_REPORT_COLUMNS, rows, totals };
 }
 
+/**
+ * Phone-call results are calculated independently from physical visits.
+ * The date window uses the same Africa/Porto-Novo civil day as the visit report.
+ */
+async function buildDailyReportPhoneData(teamId: string, reportDate: string): Promise<DailyReportPhoneData> {
+  const start = portoNovoMidnight(reportDate);
+  const nextDate = new Date(Date.parse(`${reportDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+  const end = portoNovoMidnight(nextDate);
+  const callsResult = await fetchAllRows((from, to) => supabase
+    .from("ventes_appel")
+    .select("id, commercial_id, vente_status", { count: "exact" })
+    .eq("team_id", teamId)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("id", { ascending: true })
+    .range(from, to));
+  if (callsResult.error) throw new Error("Impossible de lire les appels téléphoniques de la journée");
+
+  const countable = callsResult.data.filter((call) =>
+    typeof call.commercial_id === "string"
+    && (call.vente_status === "vente_realisee" || call.vente_status === "vente_non_realisee")
+  ) as { id: string; commercial_id: string; vente_status: "vente_realisee" | "vente_non_realisee" }[];
+  const commercialIds = [...new Set(countable.map((call) => call.commercial_id))];
+  const commercialResult = commercialIds.length
+    ? await fetchAllRows((from, to) => supabase.from("commerciaux")
+      .select("id, full_name", { count: "exact" })
+      .in("id", commercialIds)
+      .order("full_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to))
+    : { data: [], error: null, pagination: null };
+  if (commercialResult.error) throw new Error("Impossible de lire les commerciaux des appels téléphoniques");
+
+  const names = new Map((commercialResult.data as { id: string; full_name: string }[]).map((commercial) => [commercial.id, commercial.full_name]));
+  const grouped = new Map<string, DailyReportPhoneRow>();
+  for (const call of countable) {
+    const name = names.get(call.commercial_id);
+    if (!name) continue;
+    let row = grouped.get(call.commercial_id);
+    if (!row) {
+      row = {
+        commercial_id: call.commercial_id,
+        commercial_name_at_generation: name,
+        total: 0,
+        sale_realized: 0,
+        sale_not_realized: 0,
+      };
+      grouped.set(call.commercial_id, row);
+    }
+    row.total += 1;
+    if (call.vente_status === "vente_realisee") row.sale_realized += 1;
+    else row.sale_not_realized += 1;
+  }
+
+  const rows = [...grouped.values()].sort((a, b) =>
+    b.total - a.total || a.commercial_name_at_generation.localeCompare(b.commercial_name_at_generation, "fr")
+  );
+  const totals = rows.reduce((acc, row) => ({
+    total: acc.total + row.total,
+    sale_realized: acc.sale_realized + row.sale_realized,
+    sale_not_realized: acc.sale_not_realized + row.sale_not_realized,
+  }), { total: 0, sale_realized: 0, sale_not_realized: 0 });
+
+  return {
+    columns: ["Commercial", "Appels reçus", "Vente OUI", "Vente NON"],
+    rows,
+    totals,
+  };
+}
+
 function dailyReportConversion(data: DailyReportData): number {
   if (data.totals.total === 0) return 0;
   const denominator = BigInt(data.totals.total);
@@ -653,10 +737,31 @@ function dailyReportConversion(data: DailyReportData): number {
   return Number(roundedHundredths) / 100;
 }
 
-function dailyReportComment(teamName: string, reportDate: string, data: DailyReportData): string {
+function dailyReportComment(teamName: string, reportDate: string, data: DailyReportData, telephone: DailyReportPhoneData): string {
   const totals = data.totals;
-  if (totals.total === 0) return `Le ${reportDate}, aucune visite comptabilisable n'a été enregistrée pour ${teamName}.`;
-  return `Le ${reportDate}, ${teamName} totalise ${totals.total} visite${totals.total > 1 ? "s" : ""} : ${totals.out_of_zone} hors zone, ${totals.presence_confirmed} présence${totals.presence_confirmed > 1 ? "s" : ""} confirmée${totals.presence_confirmed > 1 ? "s" : ""}, ${totals.sale_not_realized} vente${totals.sale_not_realized > 1 ? "s" : ""} non réalisée${totals.sale_not_realized > 1 ? "s" : ""} et ${totals.sale_realized} vente${totals.sale_realized > 1 ? "s" : ""} réalisée${totals.sale_realized > 1 ? "s" : ""}. Taux de conversion : ${dailyReportConversion(data).toFixed(2)} %.`;
+  const visitText = totals.total === 0
+    ? `Le ${reportDate}, aucune visite physique comptabilisable n'a été enregistrée pour ${teamName}.`
+    : `Le ${reportDate}, ${teamName} totalise ${totals.total} visite${totals.total > 1 ? "s" : ""} physiques : ${totals.out_of_zone} hors zone, ${totals.presence_confirmed} présence${totals.presence_confirmed > 1 ? "s" : ""} confirmée${totals.presence_confirmed > 1 ? "s" : ""}, ${totals.sale_not_realized} vente${totals.sale_not_realized > 1 ? "s" : ""} non réalisée${totals.sale_not_realized > 1 ? "s" : ""} et ${totals.sale_realized} vente${totals.sale_realized > 1 ? "s" : ""} réalisée${totals.sale_realized > 1 ? "s" : ""}. Taux de conversion terrain : ${dailyReportConversion(data).toFixed(2)} %.`;
+  const phoneText = `En complément, ${telephone.totals.total} appel${telephone.totals.total > 1 ? "s" : ""} téléphonique${telephone.totals.total > 1 ? "s" : ""} ont été traité${telephone.totals.total > 1 ? "s" : ""}, avec ${telephone.totals.sale_realized} vente${telephone.totals.sale_realized > 1 ? "s" : ""} réalisée${telephone.totals.sale_realized > 1 ? "s" : ""} et ${telephone.totals.sale_not_realized} vente${telephone.totals.sale_not_realized > 1 ? "s" : ""} non réalisée${telephone.totals.sale_not_realized > 1 ? "s" : ""}. Ces appels sont comptabilisés séparément des visites physiques.`;
+  return `${visitText} ${phoneText}`;
+}
+
+async function saveDailyReportPhoneData(snapshotId: string, reportData: Record<string, unknown>, phoneData: DailyReportPhoneData): Promise<Record<string, unknown>> {
+  const mergedReportData = { ...reportData, telephone: phoneData };
+  const { error } = await supabase.from("daily_report_snapshots")
+    .update({ report_data: mergedReportData })
+    .eq("id", snapshotId);
+  if (error) {
+    console.error("daily report phone data persistence failed", error);
+    throw new Error("Le rapport physique est enregistré, mais les indicateurs téléphoniques n'ont pas pu être archivés");
+  }
+  return mergedReportData;
+}
+
+function getPhoneTotalsFromSnapshot(snapshot: Record<string, unknown> | null): { total: number; sale_realized: number; sale_not_realized: number } | null {
+  if (!snapshot || !snapshot.report_data || typeof snapshot.report_data !== "object") return null;
+  const telephone = (snapshot.report_data as Record<string, unknown>).telephone as DailyReportPhoneData | undefined;
+  return telephone?.totals || null;
 }
 
 function dailyReportRpcError(error: { code?: string; message?: string }): Response {
@@ -1195,7 +1300,12 @@ async function handleRoute(req: Request): Promise<Response> {
         const rateDelta = secondRate - firstRate;
         const direction = totalDelta > 0 ? "en hausse" : totalDelta < 0 ? "en baisse" : "stable";
         const rateDirection = rateDelta > 0 ? "en hausse" : rateDelta < 0 ? "en baisse" : "stable";
-        return `Entre le ${firstDate} et le ${secondDate}, le total des visites est ${direction} de ${Math.abs(totalDelta)} (${totalDelta > 0 ? "+" : ""}${totalDelta}). Le taux de conversion passe de ${firstRate.toFixed(2)} % à ${secondRate.toFixed(2)} %, ${rateDirection} de ${Math.abs(rateDelta).toFixed(2)} point${Math.abs(rateDelta) === 1 ? "" : "s"}.`;
+        const firstPhone = getPhoneTotalsFromSnapshot(first);
+        const secondPhone = getPhoneTotalsFromSnapshot(second);
+        const phoneText = firstPhone && secondPhone
+          ? ` Les appels téléphoniques évoluent séparément de ${firstPhone.total} à ${secondPhone.total} (${secondPhone.total - firstPhone.total > 0 ? "+" : ""}${secondPhone.total - firstPhone.total}), dont les ventes OUI passent de ${firstPhone.sale_realized} à ${secondPhone.sale_realized} et les ventes NON de ${firstPhone.sale_not_realized} à ${secondPhone.sale_not_realized}.`
+          : " Les indicateurs téléphoniques ne sont pas archivés dans au moins un des deux anciens instantanés.";
+        return `Entre le ${firstDate} et le ${secondDate}, le total des visites physiques est ${direction} de ${Math.abs(totalDelta)} (${totalDelta > 0 ? "+" : ""}${totalDelta}). Le taux de conversion terrain passe de ${firstRate.toFixed(2)} % à ${secondRate.toFixed(2)} %, ${rateDirection} de ${Math.abs(rateDelta).toFixed(2)} point${Math.abs(rateDelta) === 1 ? "" : "s"}.${phoneText}`;
       };
 
       if (path === "/daily-reports/teams" && method === "GET") {
@@ -1260,19 +1370,25 @@ async function handleRoute(req: Request): Promise<Response> {
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
         let reportData: DailyReportData;
+        let telephoneData: DailyReportPhoneData;
         try {
-          reportData = await buildDailyReportData(teamId, date);
+          [reportData, telephoneData] = await Promise.all([
+            buildDailyReportData(teamId, date),
+            buildDailyReportPhoneData(teamId, date),
+          ]);
         } catch (error) {
           console.error("daily report calculation failed", error);
-          return jsonError(500, "Impossible de calculer le rapport à partir des visites");
+          return jsonError(500, "Impossible de calculer les visites et les appels téléphoniques de la journée");
         }
         const conversionRate = dailyReportConversion(reportData);
         const { data: snapshotId, error } = await supabase.rpc("create_daily_report_snapshot", {
           p_team_id: teamId,
           p_report_date: date,
+          // Keep the RPC payload strictly visit-only: its existing consistency
+          // checks and physical totals must not be affected by phone calls.
           p_report_data: reportData,
           p_conversion_rate: conversionRate,
-          p_analytical_comment: dailyReportComment(team.name, date, reportData),
+          p_analytical_comment: dailyReportComment(team.name, date, reportData, telephoneData),
           p_actor_admin_id: session.user_id,
         });
         if (error) return dailyReportRpcError(error);
@@ -1281,7 +1397,14 @@ async function handleRoute(req: Request): Promise<Response> {
           .eq("id", snapshotId)
           .single();
         if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été créé mais ne peut pas être relu");
-        return jsonResponse(snapshot, 201);
+        let enrichedReportData: Record<string, unknown>;
+        try {
+          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData);
+        } catch (error) {
+          console.error("daily report phone enrichment failed", error);
+          return jsonError(500, error instanceof Error ? error.message : "Impossible d'archiver les indicateurs téléphoniques");
+        }
+        return jsonResponse({ ...snapshot, report_data: enrichedReportData }, 201);
       }
 
       if (path === "/daily-reports/regenerate" && method === "POST") {
@@ -1298,18 +1421,23 @@ async function handleRoute(req: Request): Promise<Response> {
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
         let reportData: DailyReportData;
+        let telephoneData: DailyReportPhoneData;
         try {
-          reportData = await buildDailyReportData(teamId, date);
+          [reportData, telephoneData] = await Promise.all([
+            buildDailyReportData(teamId, date),
+            buildDailyReportPhoneData(teamId, date),
+          ]);
         } catch (error) {
           console.error("daily report recalculation failed", error);
-          return jsonError(500, "Impossible de recalculer le rapport à partir des visites");
+          return jsonError(500, "Impossible de recalculer les visites et les appels téléphoniques de la journée");
         }
         const { data: snapshotId, error } = await supabase.rpc("regenerate_daily_report_snapshot", {
           p_team_id: teamId,
           p_report_date: date,
+          // The snapshot RPC continues to validate and archive physical visits only.
           p_report_data: reportData,
           p_conversion_rate: dailyReportConversion(reportData),
-          p_analytical_comment: dailyReportComment(team.name, date, reportData),
+          p_analytical_comment: dailyReportComment(team.name, date, reportData, telephoneData),
           p_actor_admin_id: session.user_id,
           p_expected_version: expectedVersion,
           p_confirmed: true,
@@ -1320,7 +1448,28 @@ async function handleRoute(req: Request): Promise<Response> {
           .eq("id", snapshotId)
           .single();
         if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été régénéré mais ne peut pas être relu");
-        return jsonResponse(snapshot);
+        let enrichedReportData: Record<string, unknown>;
+        try {
+          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData);
+          const { data: auditRecord, error: auditReadError } = await supabase.from("daily_report_regeneration_audit")
+            .select("id, replacement_snapshot")
+            .eq("report_id", snapshotId)
+            .eq("replacement_version", snapshot.version)
+            .maybeSingle();
+          if (auditReadError || !auditRecord) throw new Error("Impossible de retrouver l'archive de la version régénérée");
+          const replacementSnapshot = auditRecord.replacement_snapshot as Record<string, unknown>;
+          const replacementReportData = replacementSnapshot.report_data && typeof replacementSnapshot.report_data === "object"
+            ? replacementSnapshot.report_data as Record<string, unknown>
+            : {};
+          const { error: auditUpdateError } = await supabase.from("daily_report_regeneration_audit")
+            .update({ replacement_snapshot: { ...replacementSnapshot, report_data: { ...replacementReportData, telephone: telephoneData } } })
+            .eq("id", auditRecord.id);
+          if (auditUpdateError) throw new Error("Impossible d'archiver les indicateurs téléphoniques de la nouvelle version");
+        } catch (error) {
+          console.error("daily report phone enrichment failed", error);
+          return jsonError(500, error instanceof Error ? error.message : "Impossible d'archiver les indicateurs téléphoniques");
+        }
+        return jsonResponse({ ...snapshot, report_data: enrichedReportData });
       }
 
       return jsonError(404, "Route de rapports journaliers introuvable");

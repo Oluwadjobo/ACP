@@ -10,7 +10,7 @@ const TABLE_COLUMNS = [
   { title: "Présence confirmée", width: 220, key: "presence_confirmed" },
   { title: "Vente non réalisée", width: 230, key: "sale_not_realized" },
   { title: "Vente réalisée", width: 200, key: "sale_realized" },
-  { title: "Total général", width: 194, key: "total" },
+  { title: "Total visites physiques", width: 194, key: "total" },
 ] as const;
 
 interface DailyImageOptions {
@@ -178,7 +178,101 @@ function drawTable(
 
   const totals = snapshot.report_data.totals;
   drawTotalsRow(ctx, y, totals);
-  return y + 72;
+  return drawPhoneCallsTable(ctx, y + 72, snapshot);
+}
+
+function drawPhoneCallsTable(ctx: CanvasRenderingContext2D, startY: number, snapshot: DailyReportSnapshot): number {
+  const telephone = snapshot.report_data.telephone;
+  const title = "Activité commerciale additionnelle — appels téléphoniques";
+  ctx.fillStyle = "#075985";
+  ctx.font = "700 25px Arial, sans-serif";
+  ctx.fillText(title, MARGIN, startY);
+  let y = startY + 48;
+  if (!telephone) {
+    ctx.fillStyle = "#fff7ed";
+    ctx.fillRect(MARGIN, y, TABLE_WIDTH, 58);
+    ctx.fillStyle = "#9a3412";
+    ctx.font = "17px Arial, sans-serif";
+    ctx.fillText("Données téléphoniques non archivées dans cet ancien instantané.", MARGIN + 14, y + 18);
+    return y + 82;
+  }
+
+  const columns = [
+    { title: "Commercial", width: 550 },
+    { title: "Appels reçus", width: 320 },
+    { title: "Vente OUI", width: 320 },
+    { title: "Vente NON", width: 314 },
+  ];
+  ctx.fillStyle = "#075985";
+  ctx.fillRect(MARGIN, y, TABLE_WIDTH, 58);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 17px Arial, sans-serif";
+  let x = MARGIN;
+  columns.forEach((column, index) => {
+    if (index === 0) ctx.fillText(column.title, x + 12, y + 19);
+    else {
+      ctx.textAlign = "right";
+      ctx.fillText(column.title, x + column.width - 14, y + 19);
+      ctx.textAlign = "left";
+    }
+    x += column.width;
+  });
+  y += 58;
+
+  if (telephone.rows.length) {
+    telephone.rows.forEach((row, index) => {
+      if (index % 2 === 0) {
+        ctx.fillStyle = "#f0f9ff";
+        ctx.fillRect(MARGIN, y, TABLE_WIDTH, ROW_HEIGHT);
+      }
+      ctx.fillStyle = "#1e293b";
+      ctx.font = "17px Arial, sans-serif";
+      const values = [row.commercial_name_at_generation, formatNumber(row.total) || "0", formatNumber(row.sale_realized) || "0", formatNumber(row.sale_not_realized) || "0"];
+      let cellX = MARGIN;
+      values.forEach((value, cellIndex) => {
+        const column = columns[cellIndex];
+        if (cellIndex === 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(cellX + 8, y, column.width - 16, ROW_HEIGHT);
+          ctx.clip();
+          ctx.fillText(value, cellX + 12, y + 14);
+          ctx.restore();
+        } else {
+          ctx.textAlign = "right";
+          ctx.fillText(value, cellX + column.width - 14, y + 14);
+          ctx.textAlign = "left";
+        }
+        cellX += column.width;
+      });
+      y += ROW_HEIGHT;
+    });
+  } else {
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(MARGIN, y, TABLE_WIDTH, ROW_HEIGHT);
+    ctx.fillStyle = "#64748b";
+    ctx.font = "17px Arial, sans-serif";
+    ctx.fillText("Aucun appel téléphonique enregistré pour cette journée.", MARGIN + 12, y + 14);
+    y += ROW_HEIGHT;
+  }
+
+  ctx.fillStyle = "#e0f2fe";
+  ctx.fillRect(MARGIN, y, TABLE_WIDTH, 54);
+  ctx.fillStyle = "#0c4a6e";
+  ctx.font = "700 18px Arial, sans-serif";
+  const totalValues = ["TOTAL APPELS", formatNumber(telephone.totals.total) || "0", formatNumber(telephone.totals.sale_realized) || "0", formatNumber(telephone.totals.sale_not_realized) || "0"];
+  let totalX = MARGIN;
+  totalValues.forEach((value, index) => {
+    const column = columns[index];
+    if (index === 0) ctx.fillText(value, totalX + 12, y + 17);
+    else {
+      ctx.textAlign = "right";
+      ctx.fillText(value, totalX + column.width - 14, y + 17);
+      ctx.textAlign = "left";
+    }
+    totalX += column.width;
+  });
+  return y + 78;
 }
 
 function drawTotalsRow(ctx: CanvasRenderingContext2D, y: number, totals: DailyReportTotals): void {
@@ -272,6 +366,36 @@ function drawComparisonSummary(
     });
     tableY += 44;
   });
+
+  tableY += 18;
+  ctx.fillStyle = "#075985";
+  ctx.font = "700 19px Arial, sans-serif";
+  ctx.fillText("Activité téléphonique (séparée des visites physiques)", MARGIN + 4, tableY);
+  tableY += 34;
+  const phoneA = snapshotA.report_data.telephone?.totals;
+  const phoneB = snapshotB.report_data.telephone?.totals;
+  const phoneMetrics: { label: string; key: "total" | "sale_realized" | "sale_not_realized" }[] = [
+    { label: "Appels téléphoniques", key: "total" },
+    { label: "Appels — vente OUI", key: "sale_realized" },
+    { label: "Appels — vente NON", key: "sale_not_realized" },
+  ];
+  phoneMetrics.forEach((metric, index) => {
+    if (index % 2 === 0) {
+      ctx.fillStyle = "#f0f9ff";
+      ctx.fillRect(MARGIN, tableY, TABLE_WIDTH, 44);
+    }
+    const a = phoneA?.[metric.key];
+    const b = phoneB?.[metric.key];
+    const values = [metric.label, a == null ? "N/D" : formatNumber(a) || "0", b == null ? "N/D" : formatNumber(b) || "0", a == null || b == null ? "N/D" : `${b - a > 0 ? "+" : ""}${b - a}`, a == null || b == null ? "N/D" : percentageChange(a, b)];
+    ctx.fillStyle = "#0c4a6e";
+    ctx.font = "17px Arial, sans-serif";
+    let cellX = MARGIN;
+    values.forEach((value, cellIndex) => {
+      ctx.fillText(value, cellX + 12, tableY + 13);
+      cellX += columns[cellIndex].width;
+    });
+    tableY += 44;
+  });
   tableY += 24;
   ctx.fillStyle = "#0f172a";
   ctx.font = "700 18px Arial, sans-serif";
@@ -295,7 +419,11 @@ export function exportDailyReportJpg(options: DailyImageOptions): void {
   if (options.comparison) {
     const { dateA, dateB, snapshotA, snapshotB, analyticalComment } = options.comparison;
     if (!snapshotA || !snapshotB) throw new Error("Les deux instantanés sont requis pour exporter la comparaison.");
-    const height = 1400 + snapshotA.report_data.rows.length * ROW_HEIGHT + snapshotB.report_data.rows.length * ROW_HEIGHT;
+    const height = 1900
+      + snapshotA.report_data.rows.length * ROW_HEIGHT
+      + snapshotB.report_data.rows.length * ROW_HEIGHT
+      + (snapshotA.report_data.telephone?.rows.length || 1) * ROW_HEIGHT
+      + (snapshotB.report_data.telephone?.rows.length || 1) * ROW_HEIGHT;
     const { canvas, ctx } = newCanvas(height);
     let y = drawHeader(ctx, options.teamName, `Comparaison du ${formatDate(dateA)} au ${formatDate(dateB)}`);
     y = drawComparisonSummary(ctx, y, dateA, dateB, snapshotA, snapshotB, analyticalComment);
@@ -307,7 +435,9 @@ export function exportDailyReportJpg(options: DailyImageOptions): void {
 
   const snapshot = options.snapshot;
   if (!snapshot) throw new Error("Aucun instantané à exporter.");
-  const height = 650 + snapshot.report_data.rows.length * ROW_HEIGHT;
+  const height = 900
+    + snapshot.report_data.rows.length * ROW_HEIGHT
+    + (snapshot.report_data.telephone?.rows.length || 1) * ROW_HEIGHT;
   const { canvas, ctx } = newCanvas(height);
   let y = drawHeader(ctx, options.teamName, `Rapport du ${formatDate(snapshot.report_date)}`);
   y = drawSummary(ctx, y, snapshot);
