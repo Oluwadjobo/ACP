@@ -1,0 +1,585 @@
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false },
+});
+
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/auth-api`;
+
+function getToken(): string | null {
+  return localStorage.getItem("session_token");
+}
+
+let teamsPromise: Promise<import("@/types").Team[]> | null = null;
+
+async function apiRequestWithHeaders<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<{ data: T; headers: Headers }> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${FUNCTION_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || `Erreur ${response.status}`);
+  }
+
+  return { data: data as T, headers: response.headers };
+}
+
+async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  return (await apiRequestWithHeaders<T>(path, options)).data;
+}
+
+export const api = {
+  // Teams
+  listTeams: () => {
+    if (!teamsPromise) {
+      teamsPromise = apiRequest<import("@/types").Team[]>("/teams", { method: "GET" });
+    }
+    return teamsPromise;
+  },
+
+  // Auth
+  login: (body: { login: string; password: string; teamCode?: string }) =>
+    apiRequest<{
+      token: string;
+      userType: string;
+      fullName: string;
+      userId: string;
+      mustChangePassword?: boolean;
+      teamId: string | null;
+      role: string;
+      teamCode?: string | null;
+      teamColor?: string | null;
+      permissions: Record<string, boolean>;
+    }>("/login", { method: "POST", body: JSON.stringify({ login: body.login, password: body.password, team_code: body.teamCode }) }),
+
+  logout: () => apiRequest<{ success: boolean }>("/logout", { method: "POST" }),
+
+  me: () =>
+    apiRequest<{ userType: string; userId: string; fullName: string; mustChangePassword?: boolean; teamId: string | null; teamCode?: string | null; teamColor?: string | null; role: string; permissions: Record<string, boolean> }>("/me", {
+      method: "GET",
+    }),
+
+  switchTeam: (teamId: string | null) =>
+    apiRequest<{ success: boolean; teamId: string | null }>("/switch-team", {
+      method: "POST",
+      body: JSON.stringify({ team_id: teamId }),
+    }),
+
+  changePassword: (newPassword: string) =>
+    apiRequest<{ success: boolean }>("/change-password", {
+      method: "POST",
+      body: JSON.stringify({ newPassword }),
+    }),
+
+  // Admin - Commerciaux
+  listCommerciaux: () => apiRequest<import("@/types").Commercial[]>("/commerciaux", {
+    method: "GET",
+  }),
+
+  createCommercial: (body: { identifiant: string; full_name: string; password: string; telephone?: string; superviseur_id?: string; secteur_ids: string[] }) =>
+    apiRequest<import("@/types").Commercial>("/commerciaux", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateCommercial: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; superviseur_id: string | null; secteur_ids: string[] }>) =>
+    apiRequest<import("@/types").Commercial>(`/commerciaux/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetCommercialPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/commerciaux/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteCommercial: (id: string) =>
+    apiRequest<{ success: boolean }>(`/commerciaux/${id}`, { method: "DELETE" }),
+
+  // Admin - Superviseurs
+  listSuperviseurs: () => apiRequest<import("@/types").Superviseur[]>("/superviseurs", {
+    method: "GET",
+  }),
+
+  createSuperviseur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; secteur_ids: string[] }) =>
+    apiRequest<import("@/types").Superviseur>("/superviseurs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateSuperviseur: (id: string, body: Partial<{ identifiant: string; full_name: string; active: boolean; telephone: string; secteur_ids: string[] }>) =>
+    apiRequest<import("@/types").Superviseur>(`/superviseurs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetSuperviseurPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/superviseurs/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteSuperviseur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/superviseurs/${id}`, { method: "DELETE" }),
+
+  // Admin - Admins
+  listAdmins: () => apiRequest<import("@/types").AdminUser[]>("/admins", {
+    method: "GET",
+  }),
+
+  createAdmin: (body: { email: string; full_name: string; password: string; role?: string; team_id?: string | null }) =>
+    apiRequest<import("@/types").AdminUser>("/admins", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAdmin: (id: string, body: Partial<{ email: string; full_name: string; role?: string; team_id?: string | null }>) =>
+    apiRequest<import("@/types").AdminUser>(`/admins/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetAdminPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/admins/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteAdmin: (id: string) =>
+    apiRequest<{ success: boolean }>(`/admins/${id}`, { method: "DELETE" }),
+
+  // Admin - Secteurs
+  listSecteurs: () => apiRequest<import("@/types").Secteur[]>("/secteurs", {
+    method: "GET",
+  }),
+
+  createSecteur: (body: { nom: string; code: string; description?: string; color_code?: string }) =>
+    apiRequest<import("@/types").Secteur>("/secteurs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateSecteur: (id: string, body: Partial<{ nom: string; code: string; description: string; actif: boolean; color_code: string }>) =>
+    apiRequest<import("@/types").Secteur>(`/secteurs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  deleteSecteur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/secteurs/${id}`, { method: "DELETE" }),
+
+  // Admin - Produits
+  listProduits: () => apiRequest<import("@/types").Produit[]>("/produits", {
+    method: "GET",
+  }),
+
+  createProduit: (nom: string) =>
+    apiRequest<import("@/types").Produit>("/produits", {
+      method: "POST",
+      body: JSON.stringify({ nom }),
+    }),
+
+  deleteProduit: (id: string) =>
+    apiRequest<{ success: boolean }>(`/produits/${id}`, { method: "DELETE" }),
+
+  // Admin - Points de vente
+  listPointsVente: (params?: { active?: boolean; secteur_id?: string; q?: string; commercial_id?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.active !== undefined) qs.set("active", String(params.active));
+    if (params?.secteur_id) qs.set("secteur_id", params.secteur_id);
+    if (params?.q) qs.set("q", params.q);
+    if (params?.commercial_id) qs.set("commercial_id", params.commercial_id);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiRequest<import("@/types").PointVente[]>(`/points-vente${suffix}`, { method: "GET" });
+  },
+
+  listPointsVenteForDiagnostic: async (commercialId?: string) => {
+    const qs = new URLSearchParams({ diagnostic: "true" });
+    if (commercialId) qs.set("commercial_id", commercialId);
+    const response = await apiRequestWithHeaders<import("@/types").PointVente[]>(`/points-vente?${qs.toString()}`, { method: "GET" });
+    return {
+      data: response.data,
+      pagination: {
+        recordsReceived: Number(response.headers.get("X-Records-Received") || response.data.length),
+        reportedTotal: Number(response.headers.get("X-Reported-Total") || response.data.length),
+        pagesFetched: Number(response.headers.get("X-Pages-Fetched") || 1),
+        pageSize: Number(response.headers.get("X-Page-Size") || response.data.length),
+        truncated: response.headers.get("X-Truncated") === "true",
+      },
+    };
+  },
+
+  diagnoseCommercialPointsVente: (commercialId: string) =>
+    apiRequest<import("@/types").CommercialPointsVenteDiagnostic>("/diagnostics/commercial-points-vente", {
+      method: "POST",
+      body: JSON.stringify({ commercial_id: commercialId }),
+    }),
+
+  createPointVente: (body: {
+    name: string;
+    address: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+    secteur_id?: string;
+    frigo_comtesse?: boolean | null;
+  }) =>
+    apiRequest<import("@/types").PointVente>("/points-vente", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updatePointVente: (
+    id: string,
+    body: Partial<{ name: string; address: string; city: string; latitude: number; longitude: number; secteur_id: string | null; frigo_comtesse: boolean | null }>
+  ) =>
+    apiRequest<import("@/types").PointVente>(`/points-vente/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  deletePointVente: (id: string) =>
+    apiRequest<{ success: boolean }>(`/points-vente/${id}`, { method: "DELETE" }),
+
+  bulkUpdatePointsVente: (ids: string[], active: boolean) =>
+    apiRequest<{ success: boolean; count: number }>("/points-vente/bulk", {
+      method: "PUT",
+      body: JSON.stringify({ ids, active }),
+    }),
+
+  bulkDeletePointsVente: (ids: string[]) =>
+    apiRequest<{ success: boolean; count: number }>("/points-vente/bulk", {
+      method: "DELETE",
+      body: JSON.stringify({ ids }),
+    }),
+
+  checkPointVenteDuplicates: (body: { name: string; latitude?: number; longitude?: number }) =>
+    apiRequest<{ duplicates: { id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; active: boolean; match_type: string }[] }>("/points-vente/check-duplicates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // Admin - Dashboard
+  getDashboard: () => apiRequest<import("@/types").DashboardStats>("/dashboard", {
+    method: "GET",
+  }),
+
+  getTeamStats: (params?: { date_start?: string; date_end?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.date_start) qs.set("date_start", params.date_start);
+    if (params?.date_end) qs.set("date_end", params.date_end);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiRequest<import("@/types").TeamStats>(`/team-stats${suffix}`, { method: "GET" });
+  },
+
+  // Super Admin - immutable daily report snapshots
+  listDailyReportTeams: () =>
+    apiRequest<import("@/types").Team[]>("/daily-reports/teams", { method: "GET" }),
+
+  getDailyReportSnapshot: (teamId: string, reportDate: string) => {
+    const qs = new URLSearchParams({ team_id: teamId, report_date: reportDate });
+    return apiRequest<{ snapshot: import("@/types").DailyReportSnapshot | null; audit: import("@/types").DailyReportAuditEntry[] }>(
+      `/daily-reports/snapshot?${qs.toString()}`,
+      { method: "GET" }
+    );
+  },
+
+  compareDailyReports: (teamId: string, dateA: string, dateB: string) => {
+    const qs = new URLSearchParams({ team_id: teamId, date_a: dateA, date_b: dateB });
+    return apiRequest<{
+      team: import("@/types").Team;
+      date_a: { date: string; snapshot: import("@/types").DailyReportSnapshot | null };
+      date_b: { date: string; snapshot: import("@/types").DailyReportSnapshot | null };
+      analytical_comment: string;
+    }>(`/daily-reports/compare?${qs.toString()}`, { method: "GET" });
+  },
+
+  generateDailyReport: (teamId: string, reportDate: string) =>
+    apiRequest<import("@/types").DailyReportSnapshot>("/daily-reports/generate", {
+      method: "POST",
+      body: JSON.stringify({ team_id: teamId, report_date: reportDate }),
+    }),
+
+  regenerateDailyReport: (teamId: string, reportDate: string, expectedVersion: number) =>
+    apiRequest<import("@/types").DailyReportSnapshot>("/daily-reports/regenerate", {
+      method: "POST",
+      body: JSON.stringify({
+        team_id: teamId,
+        report_date: reportDate,
+        expected_version: expectedVersion,
+        confirmed: true,
+      }),
+    }),
+
+  listVisites: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").Visite[]; count: number; page: number; pageSize: number }>(
+      `/visites?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  listPromesses: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").PromesseAchat[]; count: number; page: number; pageSize: number }>(
+      `/promesses?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  listVentes: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").Vente[]; count: number; page: number; pageSize: number }>(
+      `/ventes?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  listBonsLivraison: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").BonLivraison[]; count: number; page: number; pageSize: number }>(
+      `/bons-livraison?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  updateBlStatut: (id: string, statut: string, commentaire?: string) =>
+    apiRequest<{ success: boolean }>(`/bons-livraison/${id}/statut`, {
+      method: "PUT",
+      body: JSON.stringify({ statut, commentaire }),
+    }),
+
+  listControles: (page = 1, pageSize = 50) =>
+    apiRequest<{ data: import("@/types").ControleTerrain[]; count: number; page: number; pageSize: number }>(
+      `/controles-terrain?page=${page}&pageSize=${pageSize}`,
+      { method: "GET" }
+    ),
+
+  // Admin - Permissions
+  getPermissions: (userType: string, userId: string) =>
+    apiRequest<{ permissions: import("@/types").Permissions }>(`/permissions?type=${userType}&id=${userId}`, { method: "GET" }),
+
+  updatePermissions: (userType: string, userId: string, permissions: Record<string, boolean>) =>
+    apiRequest<{ success: boolean; permissions: import("@/types").Permissions }>("/permissions", {
+      method: "PUT",
+      body: JSON.stringify({ userType, userId, permissions }),
+    }),
+
+  getPermissionCatalog: () =>
+    apiRequest<{ field: string[]; dashboard: string[] }>("/permissions/catalog", { method: "GET" }),
+
+  // Field - Shared
+  resolveQr: (qr_token: string) =>
+    apiRequest<{ id: string; name: string; address: string; city: string; latitude: number; longitude: number }>(
+      "/resolve-qr",
+      { method: "POST", body: JSON.stringify({ qr_token }) }
+    ),
+
+  recordVisit: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy?: number }) =>
+    apiRequest<import("@/types").VisitResult>("/visites", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  reportPdvGps: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy: number | null }) =>
+    apiRequest<{ status: "created" | "updated"; report_id: string; attempt_count: number }>("/pdv-gps-reports", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listPdvGpsReports: () =>
+    apiRequest<import("@/types").PdvGpsReport[]>("/pdv-gps-reports"),
+
+  resolvePdvGpsReport: (id: string, body: { status: "resolved" | "dismissed"; note?: string }) =>
+    apiRequest<{ success: boolean }>(`/pdv-gps-reports/${id}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  geolocNearby: (body: { latitude: number; longitude: number; radius?: number }) =>
+    apiRequest<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; distance_meters: number }[]>("/geoloc-nearby", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  geolocVisit: (body: { point_vente_id: string; latitude: number; longitude: number; accuracy?: number }) =>
+    apiRequest<import("@/types").VisitResult & { pointName?: string }>("/geoloc-visit", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  finalizeVisit: (body: { visite_id: string; vente_status: string; motif?: string }) =>
+    apiRequest<{ success: boolean; visite_id: string; vente_status: string }>("/visites/finalize", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  recordPhoneSaleStatus: (body: {
+    point_vente_id: string;
+    vente_status: "vente_realisee" | "vente_non_realisee";
+    idempotency_key: string;
+  }) =>
+    apiRequest<{ id: string; point_vente_id: string; vente_status: "vente_realisee" | "vente_non_realisee"; created_at: string; already_recorded?: boolean }>("/ventes-appel", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  createVente: (body: {
+    visite_id: string;
+    point_vente_id: string;
+    lignes: { produit_id: string; produit_nom: string; quantite: number; observation?: string }[];
+    livraison_immediate?: boolean;
+    observation?: string;
+  }) =>
+    apiRequest<{ id: string; bl_id?: string; bl_numero?: string; created_at: string }>("/ventes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  createPromesse: (body: {
+    visite_id: string;
+    point_vente_id: string;
+    produits: string[];
+    quantite: number;
+    date_previsionnelle?: string;
+    montant_estime?: number;
+    responsable?: string;
+    observations?: string;
+  }) =>
+    apiRequest<{ id: string; created_at: string }>("/promesses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  createControle: (body: {
+    point_vente_id: string;
+    visite_id?: string;
+    notation: string;
+    presence_comtesse: boolean;
+    disponibilite: boolean;
+    visibilite: boolean;
+    merchandising: boolean;
+    presence_concurrents: boolean;
+    commentaires?: string;
+    recommandations?: string;
+    actions_correctives?: string;
+  }) =>
+    apiRequest<{ id: string; created_at: string }>("/controles-terrain", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // Superviseur - ventes non réalisées de ses commerciaux
+  listVentesNonRealisees: () =>
+    apiRequest<import("@/types").Visite[]>("/ventes-non-realisees", { method: "GET" }),
+
+  myVisites: () => apiRequest<import("@/types").Visite[]>("/mes-visites", { method: "GET" }),
+
+  myControles: () => apiRequest<import("@/types").ControleTerrain[]>("/mes-controles", { method: "GET" }),
+
+  myBonsLivraison: () => apiRequest<import("@/types").BonLivraison[]>("/mes-bons-livraison", { method: "GET" }),
+
+  // Admin - Agents Livreur
+  listAgentsLivreur: () => apiRequest<import("@/types").AgentLivreur[]>("/agents-livreur", { method: "GET" }),
+
+  createAgentLivreur: (body: { identifiant: string; full_name: string; password: string; telephone?: string; commercial_ids?: string[] }) =>
+    apiRequest<import("@/types").AgentLivreur>("/agents-livreur", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAgentLivreur: (id: string, body: Partial<{ full_name: string; active: boolean; telephone: string; commercial_ids: string[] }>) =>
+    apiRequest<import("@/types").AgentLivreur>(`/agents-livreur/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  resetAgentLivreurPassword: (id: string, password: string) =>
+    apiRequest<{ success: boolean }>(`/agents-livreur/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  deleteAgentLivreur: (id: string) =>
+    apiRequest<{ success: boolean }>(`/agents-livreur/${id}`, { method: "DELETE" }),
+
+  // Admin - Commandes
+  listCommandes: () =>
+    apiRequest<{ data: import("@/types").Commande[]; count: number }>("/commandes", { method: "GET" }),
+
+  updateCommandeStatut: (id: string, statut: string) =>
+    apiRequest<{ success: boolean }>(`/commandes/${id}/statut`, {
+      method: "PUT",
+      body: JSON.stringify({ statut }),
+    }),
+
+  // Field - Search PDV
+  searchPointsVente: (q: string) =>
+    apiRequest<{ id: string; code: string; name: string; address: string; city: string; latitude: number; longitude: number; telephone?: string; secteur_id?: string; secteur?: { nom: string } | null }[]>(`/search-points-vente?q=${encodeURIComponent(q)}`, { method: "GET" }),
+
+  // Commercial - Commandes
+  createCommande: (body: { point_vente_id: string; lignes: { produit_id?: string; produit_nom: string; quantite: number; unite?: string; observation?: string }[]; observation?: string }) =>
+    apiRequest<{ id: string; code: string; created_at: string }>("/commandes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  myCommandes: () => apiRequest<import("@/types").Commande[]>("/mes-commandes", { method: "GET" }),
+
+  // Agent Livreur
+  listMesCommandesLivraison: () => apiRequest<import("@/types").Commande[]>("/mes-commandes-livraison", { method: "GET" }),
+
+  getCommandeDetail: (id: string) => apiRequest<import("@/types").Commande & { history: { ancien_statut: string | null; nouveau_statut: string; modifie_par: string; user_role: string; created_at: string }[] }>(`/commandes/${id}`, { method: "GET" }),
+
+  validerLivraison: (id: string, statut: string, commentaire?: string) =>
+    apiRequest<{ success: boolean; statut: string; date_livraison: string | null }>(`/commandes/${id}/valider-livraison`, {
+      method: "POST",
+      body: JSON.stringify({ statut, commentaire }),
+    }),
+
+  listHistoriqueLivraisons: () =>
+    apiRequest<{ id: string; commande_id: string; statut_final: string; date_livraison: string; commentaire: string | null; created_at: string; commande?: { code: string }; point_vente?: { name: string; city: string; address: string }; commercial?: { full_name: string } }[]>("/historique-livraisons", { method: "GET" }),
+
+  // Admin - Super Admin data cleanup
+  listDataCleanupAgents: () =>
+    apiRequest<import("@/types").CleanupAgent[]>("/data-cleanup/agents", { method: "GET" }),
+
+  getDataCleanupPreview: (agentType: import("@/types").CleanupAgentType, agentId: string) =>
+    apiRequest<import("@/types").CleanupPreview>(`/data-cleanup/preview?agent_type=${encodeURIComponent(agentType)}&agent_id=${encodeURIComponent(agentId)}`, { method: "GET" }),
+
+  deleteDataCleanupSelection: (body: {
+    agent_type: import("@/types").CleanupAgentType;
+    agent_id: string;
+    selected: Record<string, string[]>;
+    confirmation: string;
+    second_confirmation?: string;
+  }) =>
+    apiRequest<{ audit_id: string; deleted_records: Record<string, string[]> }>("/data-cleanup/delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listDataCleanupAudit: () =>
+    apiRequest<import("@/types").CleanupAuditEntry[]>("/data-cleanup/audit", { method: "GET" }),
+
+  // Field - Mes tournées
+  mesTournees: () => apiRequest<import("@/types").Tournee[]>("/mes-tournees", { method: "GET" }),
+
+  tourneeDetail: (secteurId: string) => apiRequest<import("@/types").TourneeDetail>(`/tournee-detail/${secteurId}`, { method: "GET" }),
+
+  mesPointsVente: () => apiRequest<import("@/types").MesPointVente[]>("/mes-points-vente", { method: "GET" }),
+};
