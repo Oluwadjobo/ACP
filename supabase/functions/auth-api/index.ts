@@ -1409,7 +1409,7 @@ async function handleRoute(req: Request): Promise<Response> {
         // Legacy snapshots are enriched on read so admins do not need to create
         // an unnecessary new report version just to display phone-call metrics.
         const enrichedSnapshot = await ensureDailyReportPhoneDataArchived(
-          teamId, date, team.name, data as Record<string, unknown>,
+          teamId, date, teamName, data as Record<string, unknown>,
         );
         return { data: enrichedSnapshot, error: null };
       };
