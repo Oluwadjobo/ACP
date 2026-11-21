@@ -3394,18 +3394,44 @@ async function handleRoute(req: Request): Promise<Response> {
         vente_status,
       });
     }
-    // --- CREATE VENTE (with multi-product lignes + auto BL) ---
+    // --- CREATE VENTE (terrain QR/GPS or phone order) ---
     if (path === "/ventes" && method === "POST") {
       const denied = requirePermission("record_vente"); if (denied) return denied;
-      const { visite_id, point_vente_id: bodyPointVenteId, lignes, livraison_immediate, observation } = await req.json();
-      if (!visite_id || !bodyPointVenteId || !Array.isArray(lignes) || lignes.length === 0)
-        return jsonError(400, "Visite, point de vente et au moins une ligne de produit requis");
+      const body = await req.json();
+      const {
+        visite_id,
+        point_vente_id: bodyPointVenteId,
+        lignes,
+        livraison_immediate,
+        observation,
+        canal_commande: requestedChannel,
+        idempotency_key,
+      } = body;
+      const canalCommande = requestedChannel === "appel" ? "appel" : "terrain";
+      if (requestedChannel != null && requestedChannel !== "appel" && requestedChannel !== "terrain") {
+        return jsonError(400, "Canal de commande invalide");
+      }
+      const isPhoneOrder = canalCommande === "appel";
+
+      if (!bodyPointVenteId || !Array.isArray(lignes) || lignes.length === 0) {
+        return jsonError(400, "Point de vente et au moins une ligne de produit requis");
+      }
+      if (isPhoneOrder) {
+        if (userRole !== "commercial") return jsonError(403, "Les commandes par téléphone sont réservées aux commerciaux");
+        if (visite_id) return jsonError(400, "Une commande par téléphone ne doit pas être associée à une visite physique");
+        if (typeof idempotency_key !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotency_key)) {
+          return jsonError(400, "Clé de sécurité de commande invalide. Fermez puis rouvrez le formulaire.");
+        }
+        if (!userTeamId) return jsonError(400, "Une équipe est requise pour enregistrer cette commande");
+      } else if (!visite_id) {
+        return jsonError(400, "Une visite validée est obligatoire pour une vente de terrain");
+      }
 
       for (const l of lignes) {
         if (!l.produit_id || typeof l.produit_id !== "string")
           return jsonError(400, "Chaque ligne doit référencer un produit du catalogue");
-        if (!Number.isFinite(Number(l.quantite)) || Number(l.quantite) <= 0)
-          return jsonError(400, "La quantité doit être supérieure à zéro");
+        if (!Number.isFinite(Number(l.quantite)) || Number(l.quantite) <= 0 || !Number.isInteger(Number(l.quantite)))
+          return jsonError(400, "La quantité doit être un nombre entier supérieur à zéro");
       }
 
       const produitIds = [...new Set(lignes.map((l: Record<string, unknown>) => String(l.produit_id)))];
@@ -3415,57 +3441,100 @@ async function handleRoute(req: Request): Promise<Response> {
       if (produitError) return jsonError(500, "Erreur lors de la vérification des produits");
       const validMap = new Map((validProduits ?? []).map((p: Record<string, unknown>) => [String(p.id), String(p.nom)]));
       for (const id of produitIds) {
-        if (!validMap.has(id)) return jsonError(400, "Un produit sélectionné n'existe pas dans le catalogue");
+        if (!validMap.has(id)) return jsonError(400, "Un produit sélectionné n'existe pas dans le catalogue de votre équipe");
       }
 
-      const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
-      if (userTeamId) ownerFilter.team_id = userTeamId;
-      const { data: visite } = await supabase.from("visites").select("id, status, point_vente_id").match(ownerFilter).maybeSingle();
-      if (!visite) return jsonError(404, "Visite introuvable");
-      if (visite.status !== "confirmed") {
-        return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
-      }
-      // The sale belongs to the point de vente whose presence was actually proven by the
-      // visit, never to one named by the caller.
-      const point_vente_id = String(visite.point_vente_id);
-      if (String(bodyPointVenteId) !== point_vente_id) {
-        return jsonError(409, "Ce point de vente ne correspond pas à celui de la visite.");
-      }
-      const { data: venteExistante } = await supabase.from("ventes").select("id").eq("visite_id", visite_id).maybeSingle();
-      if (venteExistante) return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
-
+      let point_vente_id = String(bodyPointVenteId);
       let secteur_id: string | null = null;
-      if (userRole === "commercial") {
-        const info = await getCommercialSecteur(userId, userTeamId);
-        secteur_id = info.secteur_id;
+      let resolvedVisitId: string | null = null;
+
+      if (isPhoneOrder) {
+        // A phone order is allowed only for a POS currently assigned to this commercial.
+        // This path intentionally does not create, update, or finalize a physical visit.
+        const assigned = await getAssignedPOSForCommercial(userId, userTeamId, false);
+        if (assigned.error || !assigned.points) return jsonError(500, assigned.error || "Impossible de vérifier le portefeuille commercial");
+        const assignedPoint = (assigned.points as Record<string, unknown>[]).find((point) => String(point.id) === point_vente_id);
+        if (!assignedPoint || String(assignedPoint.team_id) !== userTeamId) {
+          return jsonError(403, "Ce point de vente ne figure pas dans votre portefeuille");
+        }
+        secteur_id = assignedPoint.secteur_id ? String(assignedPoint.secteur_id) : null;
+
+        // Return the already-created order when the same submission is retried.
+        const { data: priorSale, error: priorSaleError } = await supabase
+          .from("ventes").select("id, created_at, point_vente_id")
+          .eq("idempotency_key", idempotency_key)
+          .eq("commercial_id", userId)
+          .eq("team_id", userTeamId)
+          .maybeSingle();
+        if (priorSaleError) return jsonError(500, "Erreur lors de la vérification de la commande");
+        if (priorSale) {
+          if (String(priorSale.point_vente_id) !== point_vente_id) return jsonError(409, "Cette clé correspond déjà à une commande sur un autre point de vente.");
+          const { data: priorBl } = await supabase.from("bons_livraison").select("id, numero").eq("vente_id", priorSale.id).maybeSingle();
+          if (!priorBl) return jsonError(409, "La commande a été créée, mais son bon de livraison doit être vérifié par l'administration.");
+          return jsonResponse({ id: priorSale.id, bl_id: priorBl.id, bl_numero: priorBl.numero, created_at: priorSale.created_at, already_recorded: true }, 200);
+        }
       } else {
-        secteur_id = await getSuperviseurSecteur(userId, userTeamId);
+        const ownerFilter: Record<string, unknown> = userRole === "commercial" ? { id: visite_id, commercial_id: userId } : { id: visite_id, superviseur_id: userId };
+        if (userTeamId) ownerFilter.team_id = userTeamId;
+        const { data: visite, error: visiteError } = await supabase.from("visites").select("id, status, point_vente_id").match(ownerFilter).maybeSingle();
+        if (visiteError) return jsonError(500, "Erreur lors de la vérification de la visite");
+        if (!visite) return jsonError(404, "Visite introuvable");
+        if (visite.status !== "confirmed") return jsonError(409, "Cette visite n'a pas été validée sur le terrain.");
+        point_vente_id = String(visite.point_vente_id);
+        if (String(bodyPointVenteId) !== point_vente_id) return jsonError(409, "Ce point de vente ne correspond pas à celui de la visite.");
+        resolvedVisitId = String(visite.id);
+
+        const { data: venteExistante, error: existingSaleError } = await supabase.from("ventes").select("id").eq("visite_id", resolvedVisitId).maybeSingle();
+        if (existingSaleError) return jsonError(500, "Erreur lors de la vérification des ventes existantes");
+        if (venteExistante) return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
+        if (userRole === "commercial") {
+          const info = await getCommercialSecteur(userId, userTeamId);
+          secteur_id = info.secteur_id;
+        } else {
+          secteur_id = await getSuperviseurSecteur(userId, userTeamId);
+        }
+        if (!secteur_id) secteur_id = await getPointVenteSecteur(point_vente_id, userTeamId);
       }
-      if (!secteur_id) secteur_id = await getPointVenteSecteur(point_vente_id, userTeamId);
 
       const venteInsert: Record<string, unknown> = {
-        visite_id, point_vente_id, montant_total: 0,
+        visite_id: resolvedVisitId,
+        point_vente_id,
+        canal_commande: canalCommande,
+        idempotency_key: isPhoneOrder ? idempotency_key : null,
+        montant_total: 0,
         observation: observation?.trim() || null,
       };
       if (userRole === "commercial") venteInsert.commercial_id = userId; else venteInsert.superviseur_id = userId;
       if (secteur_id) venteInsert.secteur_id = secteur_id;
       if (userTeamId) venteInsert.team_id = userTeamId;
       const { data: vente, error: venteError } = await supabase.from("ventes").insert(venteInsert).select("id, created_at").maybeSingle();
-      if (venteError?.code === "23505") return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
+      if (venteError?.code === "23505") {
+        if (!isPhoneOrder) return jsonError(409, "Une vente a déjà été enregistrée pour cette visite.");
+        const { data: duplicateSale } = await supabase.from("ventes").select("id, created_at, point_vente_id")
+          .eq("idempotency_key", idempotency_key).eq("commercial_id", userId).eq("team_id", userTeamId).maybeSingle();
+        if (duplicateSale && String(duplicateSale.point_vente_id) === point_vente_id) {
+          const { data: duplicateBl } = await supabase.from("bons_livraison").select("id, numero").eq("vente_id", duplicateSale.id).maybeSingle();
+          if (duplicateBl) return jsonResponse({ id: duplicateSale.id, bl_id: duplicateBl.id, bl_numero: duplicateBl.numero, created_at: duplicateSale.created_at, already_recorded: true }, 200);
+        }
+        return jsonError(409, "Cette demande de commande est déjà en cours de traitement.");
+      }
       if (venteError || !vente) return jsonError(500, "Erreur lors de la création de la vente");
 
       const lignesData = lignes.map((l: Record<string, unknown>) => ({
         vente_id: vente.id,
         produit_id: String(l.produit_id),
         produit_nom: validMap.get(String(l.produit_id)) || String(l.produit_nom || "").trim(),
-        quantite: Number(l.quantite) || 1,
+        quantite: Number(l.quantite),
         prix_unitaire: 0,
         montant: 0,
         observation: l.observation?.trim() || null,
         ...(userTeamId ? { team_id: userTeamId } : {}),
       }));
       const { error: lignesError } = await supabase.from("vente_lignes").insert(lignesData);
-      if (lignesError) return jsonError(500, "Erreur lors de l'enregistrement des lignes");
+      if (lignesError) {
+        await supabase.from("ventes").delete().eq("id", vente.id);
+        return jsonError(500, "L'enregistrement des produits a échoué. La commande a été annulée ; vous pouvez réessayer.");
+      }
 
       const blNumero = generateBlNumero();
       const blInsert: Record<string, unknown> = {
@@ -3477,22 +3546,31 @@ async function handleRoute(req: Request): Promise<Response> {
       if (livraison_immediate) blInsert.date_livraison = new Date().toISOString();
       if (userTeamId) blInsert.team_id = userTeamId;
       const { data: bl, error: blError } = await supabase.from("bons_livraison").insert(blInsert).select("id, numero").maybeSingle();
-      if (blError) return jsonError(500, "Erreur lors de la création du bon de livraison");
+      if (blError || !bl) {
+        await supabase.from("ventes").delete().eq("id", vente.id);
+        return jsonError(500, "La création du bon de livraison a échoué. La commande a été annulée ; vous pouvez réessayer.");
+      }
 
       const blLignesData = lignes.map((l: Record<string, unknown>) => ({
-        bl_id: bl!.id,
+        bl_id: bl.id,
         produit_id: String(l.produit_id),
         produit_nom: validMap.get(String(l.produit_id)) || String(l.produit_nom || "").trim(),
-        quantite: Number(l.quantite) || 1,
+        quantite: Number(l.quantite),
         unite: "unité",
         observation: l.observation?.trim() || null,
         ...(userTeamId ? { team_id: userTeamId } : {}),
       }));
-      await supabase.from("bl_lignes").insert(blLignesData);
+      const { error: blLignesError } = await supabase.from("bl_lignes").insert(blLignesData);
+      if (blLignesError) {
+        await supabase.from("ventes").delete().eq("id", vente.id);
+        return jsonError(500, "Les lignes du bon de livraison n'ont pas pu être enregistrées. La commande a été annulée ; vous pouvez réessayer.");
+      }
 
-      await supabase.from("visites").update({ vente_status: livraison_immediate ? "vente_livraison" : "vente_realisee" }).eq("id", visite_id);
+      if (resolvedVisitId) {
+        await supabase.from("visites").update({ vente_status: livraison_immediate ? "vente_livraison" : "vente_realisee" }).eq("id", resolvedVisitId);
+      }
 
-      return jsonResponse({ id: vente.id, bl_id: bl!.id, bl_numero: bl!.numero, created_at: vente.created_at }, 201);
+      return jsonResponse({ id: vente.id, bl_id: bl.id, bl_numero: bl.numero, created_at: vente.created_at }, 201);
     }
 
     // --- CREATE PROMESSE D'ACHAT (superviseur only) ---
