@@ -428,14 +428,22 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  recordPhoneSaleStatus: (body: {
+    point_vente_id: string;
+    vente_status: "vente_realisee" | "vente_non_realisee";
+    idempotency_key: string;
+  }) =>
+    apiRequest<{ id: string; point_vente_id: string; vente_status: "vente_realisee" | "vente_non_realisee"; created_at: string; already_recorded?: boolean }>("/ventes-appel", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   createVente: (body: {
-    visite_id?: string;
+    visite_id: string;
     point_vente_id: string;
     lignes: { produit_id: string; produit_nom: string; quantite: number; observation?: string }[];
     livraison_immediate?: boolean;
     observation?: string;
-    canal_commande?: "terrain" | "appel";
-    idempotency_key?: string;
   }) =>
     apiRequest<{ id: string; bl_id?: string; bl_numero?: string; created_at: string }>("/ventes", {
       method: "POST",

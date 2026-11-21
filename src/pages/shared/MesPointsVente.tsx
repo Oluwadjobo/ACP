@@ -1,12 +1,12 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Store, Search, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package, PhoneCall, Plus, Trash2, X, Loader2, ShoppingCart } from "lucide-react";
+import { Store, Search, Navigation, Phone, CheckCircle2, Clock, TrendingUp, Truck, Package, PhoneCall, X, Loader2, TrendingDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { MesPointVente as MesPointVenteType, Produit } from "@/types";
+import type { MesPointVente as MesPointVenteType } from "@/types";
 import { formatDate, formatPointVenteAddress } from "@/lib/format";
 
-type OrderLine = { produit_id: string; quantite: number };
+type PhoneSaleStatus = "vente_realisee" | "vente_non_realisee";
 
 export function MesPointsVente() {
   const { userType, hasPermission } = useAuth();
@@ -16,14 +16,11 @@ export function MesPointsVente() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<string>("all");
 
-  const [orderPoint, setOrderPoint] = useState<MesPointVenteType | null>(null);
-  const [products, setProducts] = useState<Produit[]>([]);
-  const [productsLoading, setProductsLoading] = useState(false);
-  const [orderLines, setOrderLines] = useState<OrderLine[]>([{ produit_id: "", quantite: 1 }]);
-  const [orderObservation, setOrderObservation] = useState("");
-  const [orderError, setOrderError] = useState<string | null>(null);
-  const [orderBusy, setOrderBusy] = useState(false);
-  const [orderSuccess, setOrderSuccess] = useState<{ bl_numero?: string } | null>(null);
+  const [phonePoint, setPhonePoint] = useState<MesPointVenteType | null>(null);
+  const [phoneSaleStatus, setPhoneSaleStatus] = useState<PhoneSaleStatus | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneSuccess, setPhoneSuccess] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const submitLockRef = useRef(false);
 
@@ -52,71 +49,41 @@ export function MesPointsVente() {
     return result;
   }, [points, search, filter]);
 
-  async function openPhoneOrder(point: MesPointVenteType) {
-    setOrderPoint(point);
-    setOrderLines([{ produit_id: "", quantite: 1 }]);
-    setOrderObservation("");
-    setOrderError(null);
-    setOrderSuccess(null);
+  function openPhoneOrder(point: MesPointVenteType) {
+    setPhonePoint(point);
+    setPhoneSaleStatus(null);
+    setPhoneError(null);
+    setPhoneSuccess(false);
     idempotencyKeyRef.current = crypto.randomUUID();
-    if (products.length === 0) {
-      setProductsLoading(true);
-      try {
-        setProducts(await api.listProduits());
-      } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Impossible de charger le catalogue produits.");
-      } finally {
-        setProductsLoading(false);
-      }
-    }
   }
 
   function closePhoneOrder() {
-    if (orderBusy) return;
-    setOrderPoint(null);
-    setOrderError(null);
-    setOrderSuccess(null);
+    if (phoneBusy) return;
+    setPhonePoint(null);
+    setPhoneSaleStatus(null);
+    setPhoneError(null);
+    setPhoneSuccess(false);
     idempotencyKeyRef.current = null;
   }
 
-  function updateOrderLine(index: number, patch: Partial<OrderLine>) {
-    setOrderLines((current) => current.map((line, i) => i === index ? { ...line, ...patch } : line));
-  }
-
   async function submitPhoneOrder() {
-    if (!orderPoint || submitLockRef.current || orderSuccess) return;
-    const validLines = orderLines.filter((line) => line.produit_id && Number.isInteger(line.quantite) && line.quantite > 0);
-    if (validLines.length === 0) {
-      setOrderError("Sélectionne au moins un produit et une quantité valide.");
-      return;
-    }
+    if (!phonePoint || !phoneSaleStatus || submitLockRef.current || phoneSuccess) return;
     if (!idempotencyKeyRef.current) idempotencyKeyRef.current = crypto.randomUUID();
     submitLockRef.current = true;
-    setOrderBusy(true);
-    setOrderError(null);
+    setPhoneBusy(true);
+    setPhoneError(null);
     try {
-      const result = await api.createVente({
-        point_vente_id: orderPoint.id,
-        canal_commande: "appel",
+      await api.recordPhoneSaleStatus({
+        point_vente_id: phonePoint.id,
+        vente_status: phoneSaleStatus,
         idempotency_key: idempotencyKeyRef.current,
-        lignes: validLines.map((line) => {
-          const produit = products.find((item) => item.id === line.produit_id);
-          return { produit_id: line.produit_id, produit_nom: produit?.nom || "", quantite: line.quantite };
-        }),
-        observation: orderObservation.trim() || undefined,
       });
-      setOrderSuccess({ bl_numero: result.bl_numero });
-      try {
-        const refreshed = await api.mesPointsVente();
-        setPoints(refreshed);
-      } catch {
-        // The order is already saved; a failed list refresh must not report it as failed.
-      }
+      setPhoneSuccess(true);
     } catch (error) {
-      setOrderError(error instanceof Error ? error.message : "Impossible d'enregistrer cette commande.");
+      setPhoneError(error instanceof Error ? error.message : "Impossible d'enregistrer le résultat de l'appel.");
     } finally {
       submitLockRef.current = false;
-      setOrderBusy(false);
+      setPhoneBusy(false);
     }
   }
 
@@ -229,78 +196,80 @@ export function MesPointsVente() {
         )}
       </main>
 
-      {orderPoint && (
+      {phonePoint && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-5" role="dialog" aria-modal="true" aria-labelledby="phone-order-title">
-          <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
+          <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-5 py-4">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-600">Commande hors tournée</p>
                 <h2 id="phone-order-title" className="text-lg font-bold text-gray-900">Commande par téléphone</h2>
               </div>
-              <button onClick={closePhoneOrder} disabled={orderBusy} className="rounded-full p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-40" aria-label="Fermer"><X size={20} /></button>
+              <button onClick={closePhoneOrder} disabled={phoneBusy} className="rounded-full p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-40" aria-label="Fermer"><X size={20} /></button>
             </div>
 
             <div className="space-y-4 px-5 py-4">
               <div className="rounded-xl bg-gray-50 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-semibold text-gray-900">{orderPoint.name}</p>
-                    <p className="text-xs text-gray-500">{orderPoint.code} · {formatPointVenteAddress(orderPoint.address, orderPoint.city)}</p>
+                    <p className="font-semibold text-gray-900">{phonePoint.name}</p>
+                    <p className="text-xs text-gray-500">{phonePoint.code} · {formatPointVenteAddress(phonePoint.address, phonePoint.city)}</p>
                   </div>
-                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${orderPoint.statut === "visite" ? "bg-success-50 text-success-700" : "bg-gray-200 text-gray-600"}`}>
-                    {orderPoint.statut === "visite" ? "Déjà visité" : "Non visité"}
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${phonePoint.statut === "visite" ? "bg-success-50 text-success-700" : "bg-gray-200 text-gray-600"}`}>
+                    {phonePoint.statut === "visite" ? "Déjà visité" : "Non visité"}
                   </span>
                 </div>
-                <div className="mt-2 flex items-center gap-2 text-xs text-primary-700"><PhoneCall size={14} /> Canal d'enregistrement : appel téléphonique</div>
-                <p className="mt-1 text-[10px] text-gray-500">Cette opération enregistre une vente et un bon de livraison, sans créer ni valider une présence QR/GPS.</p>
+                <div className="mt-2 flex items-center gap-2 text-xs text-primary-700"><PhoneCall size={14} /> Appel téléphonique</div>
+                <p className="mt-1 text-[10px] text-gray-500">Enregistre uniquement le résultat de l'appel. Aucune présence QR/GPS ni visite physique ne sera créée ou modifiée.</p>
               </div>
 
-              {productsLoading ? (
-                <div className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500"><Loader2 size={18} className="animate-spin" /> Chargement du catalogue...</div>
-              ) : products.length === 0 ? (
-                <p className="rounded-lg bg-warning-50 p-3 text-sm text-warning-700">Aucun produit disponible dans le catalogue de ton équipe.</p>
-              ) : (
+              {!phoneSuccess ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-gray-900">Produits commandés</h3><button onClick={() => setOrderLines((current) => [...current, { produit_id: "", quantite: 1 }])} className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700"><Plus size={14} /> Ajouter</button></div>
-                  {orderLines.map((line, index) => (
-                    <div key={index} className="grid grid-cols-[minmax(0,1fr)_84px_34px] items-end gap-2">
-                      <label className="min-w-0 text-xs font-medium text-gray-600">Produit
-                        <select className="input mt-1 w-full text-sm" value={line.produit_id} onChange={(event) => updateOrderLine(index, { produit_id: event.target.value })}>
-                          <option value="">Choisir un produit</option>
-                          {products.map((product) => <option key={product.id} value={product.id}>{product.nom}</option>)}
-                        </select>
-                      </label>
-                      <label className="text-xs font-medium text-gray-600">Quantité
-                        <input className="input mt-1 w-full text-sm" type="number" min="1" step="1" value={line.quantite} onChange={(event) => updateOrderLine(index, { quantite: Math.max(1, Number(event.target.value) || 1) })} />
-                      </label>
-                      <button onClick={() => setOrderLines((current) => current.length === 1 ? current : current.filter((_, i) => i !== index))} disabled={orderLines.length === 1} className="mb-1 rounded-lg p-2 text-gray-400 hover:bg-error-50 hover:text-error-600 disabled:opacity-30" aria-label="Supprimer la ligne"><Trash2 size={16} /></button>
-                    </div>
-                  ))}
+                  <h3 className="text-sm font-semibold text-gray-900">Résultat de l'appel</h3>
+                  <button
+                    type="button"
+                    aria-pressed={phoneSaleStatus === "vente_realisee"}
+                    onClick={() => { setPhoneSaleStatus("vente_realisee"); setPhoneError(null); }}
+                    disabled={phoneBusy}
+                    className={`w-full rounded-xl border p-4 flex items-center gap-3 text-left transition-all ${phoneSaleStatus === "vente_realisee" ? "border-success-500 bg-success-50 ring-2 ring-success-200" : "border-gray-200 bg-white hover:bg-gray-50"}`}
+                  >
+                    <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${phoneSaleStatus === "vente_realisee" ? "border-success-600" : "border-gray-300"}`}>
+                      {phoneSaleStatus === "vente_realisee" && <span className="w-2.5 h-2.5 rounded-full bg-success-600" />}
+                    </span>
+                    <TrendingUp size={19} className="text-success-600" />
+                    <span className="font-semibold text-gray-900">Vente réalisée : OUI</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={phoneSaleStatus === "vente_non_realisee"}
+                    onClick={() => { setPhoneSaleStatus("vente_non_realisee"); setPhoneError(null); }}
+                    disabled={phoneBusy}
+                    className={`w-full rounded-xl border p-4 flex items-center gap-3 text-left transition-all ${phoneSaleStatus === "vente_non_realisee" ? "border-error-500 bg-error-50 ring-2 ring-error-200" : "border-gray-200 bg-white hover:bg-gray-50"}`}
+                  >
+                    <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${phoneSaleStatus === "vente_non_realisee" ? "border-error-600" : "border-gray-300"}`}>
+                      {phoneSaleStatus === "vente_non_realisee" && <span className="w-2.5 h-2.5 rounded-full bg-error-600" />}
+                    </span>
+                    <TrendingDown size={19} className="text-error-600" />
+                    <span className="font-semibold text-gray-900">Vente réalisée : NON</span>
+                  </button>
                 </div>
-              )}
-
-              <label className="block text-xs font-medium text-gray-600">Observation (facultatif)
-                <textarea className="input mt-1 min-h-20 w-full resize-y text-sm" value={orderObservation} onChange={(event) => setOrderObservation(event.target.value)} placeholder="Précision sur l'appel ou la commande..." />
-              </label>
-
-              {orderError && <p className="rounded-lg bg-error-50 p-3 text-sm text-error-700" role="alert">{orderError}</p>}
-              {orderSuccess && (
+              ) : (
                 <div className="rounded-xl bg-success-50 p-4 text-sm text-success-800">
-                  <div className="flex items-center gap-2 font-semibold"><CheckCircle2 size={18} /> Commande enregistrée avec succès.</div>
-                  {orderSuccess.bl_numero && <p className="mt-1">Bon de livraison : <strong>{orderSuccess.bl_numero}</strong></p>}
-                  <p className="mt-1 text-xs">Aucune visite physique n'a été ajoutée ou modifiée.</p>
+                  <div className="flex items-center gap-2 font-semibold"><CheckCircle2 size={18} /> Résultat de l'appel enregistré.</div>
+                  <p className="mt-1 text-xs">{phoneSaleStatus === "vente_realisee" ? "Vente déclarée réalisée." : "Vente déclarée non réalisée."} Aucune visite physique n'a été ajoutée ou modifiée.</p>
                 </div>
               )}
+
+              {phoneError && <p className="rounded-lg bg-error-50 p-3 text-sm text-error-700" role="alert">{phoneError}</p>}
             </div>
 
             <div className="sticky bottom-0 flex gap-2 border-t border-gray-100 bg-white px-5 py-4">
-              {orderSuccess ? (
+              {phoneSuccess ? (
                 <button onClick={closePhoneOrder} className="btn-primary w-full"><CheckCircle2 size={16} /> Terminer</button>
               ) : (
                 <>
-                  <button onClick={closePhoneOrder} disabled={orderBusy} className="btn-secondary flex-1">Annuler</button>
-                  <button onClick={submitPhoneOrder} disabled={orderBusy || productsLoading || products.length === 0} className="btn-primary flex-1">
-                    {orderBusy ? <><Loader2 size={16} className="animate-spin" /> Enregistrement...</> : <><ShoppingCart size={16} /> Valider la commande</>}
+                  <button onClick={closePhoneOrder} disabled={phoneBusy} className="btn-secondary flex-1">Annuler</button>
+                  <button onClick={submitPhoneOrder} disabled={phoneBusy || !phoneSaleStatus} className="btn-primary flex-1">
+                    {phoneBusy ? <><Loader2 size={16} className="animate-spin" /> Soumission...</> : "Soumettre"}
                   </button>
                 </>
               )}

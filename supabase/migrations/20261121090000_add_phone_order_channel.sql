@@ -1,40 +1,34 @@
--- Allow a commercial to record a sale received by phone without creating a visit.
--- Existing field sales remain linked to a confirmed QR/GPS visit.
+-- Enregistre le résultat d'un appel commercial sans créer de visite physique,
+-- sans coordonnées GPS, sans produits, sans quantités et sans bon de livraison.
+CREATE TABLE IF NOT EXISTS public.ventes_appel (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id uuid NOT NULL REFERENCES public.teams(id) ON DELETE RESTRICT,
+  commercial_id uuid NOT NULL REFERENCES public.commerciaux(id) ON DELETE CASCADE,
+  point_vente_id uuid NOT NULL REFERENCES public.points_vente(id) ON DELETE CASCADE,
+  vente_status text NOT NULL CHECK (vente_status IN ('vente_realisee', 'vente_non_realisee')),
+  idempotency_key uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ventes_appel_commercial_idempotency_unique UNIQUE (commercial_id, idempotency_key)
+);
 
-ALTER TABLE public.ventes
-  ALTER COLUMN visite_id DROP NOT NULL;
+ALTER TABLE public.ventes_appel ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE public.ventes
-  ADD COLUMN IF NOT EXISTS canal_commande text;
+DROP POLICY IF EXISTS "deny_select_ventes_appel" ON public.ventes_appel;
+CREATE POLICY "deny_select_ventes_appel" ON public.ventes_appel
+  FOR SELECT TO anon, authenticated USING (false);
+DROP POLICY IF EXISTS "deny_insert_ventes_appel" ON public.ventes_appel;
+CREATE POLICY "deny_insert_ventes_appel" ON public.ventes_appel
+  FOR INSERT TO anon, authenticated WITH CHECK (false);
+DROP POLICY IF EXISTS "deny_update_ventes_appel" ON public.ventes_appel;
+CREATE POLICY "deny_update_ventes_appel" ON public.ventes_appel
+  FOR UPDATE TO anon, authenticated USING (false) WITH CHECK (false);
+DROP POLICY IF EXISTS "deny_delete_ventes_appel" ON public.ventes_appel;
+CREATE POLICY "deny_delete_ventes_appel" ON public.ventes_appel
+  FOR DELETE TO anon, authenticated USING (false);
 
-UPDATE public.ventes
-SET canal_commande = 'terrain'
-WHERE canal_commande IS NULL;
-
-ALTER TABLE public.ventes
-  ALTER COLUMN canal_commande SET DEFAULT 'terrain',
-  ALTER COLUMN canal_commande SET NOT NULL;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'ventes_canal_commande_check'
-      AND conrelid = 'public.ventes'::regclass
-  ) THEN
-    ALTER TABLE public.ventes
-      ADD CONSTRAINT ventes_canal_commande_check
-      CHECK (canal_commande IN ('terrain', 'appel'));
-  END IF;
-END $$;
-
-ALTER TABLE public.ventes
-  ADD COLUMN IF NOT EXISTS idempotency_key uuid;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ventes_idempotency_key_unique
-  ON public.ventes (idempotency_key)
-  WHERE idempotency_key IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS ventes_canal_commande_created_at_idx
-  ON public.ventes (canal_commande, created_at DESC);
+CREATE INDEX IF NOT EXISTS ventes_appel_team_created_idx
+  ON public.ventes_appel (team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ventes_appel_commercial_created_idx
+  ON public.ventes_appel (commercial_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ventes_appel_point_created_idx
+  ON public.ventes_appel (point_vente_id, created_at DESC);
