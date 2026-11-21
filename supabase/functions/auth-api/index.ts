@@ -746,16 +746,137 @@ function dailyReportComment(teamName: string, reportDate: string, data: DailyRep
   return `${visitText} ${phoneText}`;
 }
 
-async function saveDailyReportPhoneData(snapshotId: string, reportData: Record<string, unknown>, phoneData: DailyReportPhoneData): Promise<Record<string, unknown>> {
+function isDailyReportData(value: unknown): value is DailyReportData {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<DailyReportData>;
+  const totals = candidate.totals;
+  return Array.isArray(candidate.columns)
+    && Array.isArray(candidate.rows)
+    && !!totals
+    && Number.isFinite(totals.out_of_zone)
+    && Number.isFinite(totals.presence_confirmed)
+    && Number.isFinite(totals.sale_not_realized)
+    && Number.isFinite(totals.sale_realized)
+    && Number.isFinite(totals.total);
+}
+
+function isDailyReportPhoneData(value: unknown): value is DailyReportPhoneData {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<DailyReportPhoneData>;
+  const totals = candidate.totals;
+  return Array.isArray(candidate.columns)
+    && Array.isArray(candidate.rows)
+    && !!totals
+    && Number.isFinite(totals.total)
+    && Number.isFinite(totals.sale_realized)
+    && Number.isFinite(totals.sale_not_realized);
+}
+
+async function saveDailyReportPhoneData(
+  snapshotId: string,
+  reportData: Record<string, unknown>,
+  phoneData: DailyReportPhoneData,
+  teamName?: string,
+  reportDate?: string,
+): Promise<Record<string, unknown>> {
   const mergedReportData = { ...reportData, telephone: phoneData };
-  const { error } = await supabase.from("daily_report_snapshots")
-    .update({ report_data: mergedReportData })
-    .eq("id", snapshotId);
-  if (error) {
+  const updates: Record<string, unknown> = { report_data: mergedReportData };
+  if (teamName && reportDate && isDailyReportData(reportData)) {
+    updates.analytical_comment = dailyReportComment(teamName, reportDate, reportData, phoneData);
+  }
+  const { data, error } = await supabase.from("daily_report_snapshots")
+    .update(updates)
+    .eq("id", snapshotId)
+    .select("id")
+    .maybeSingle();
+  if (error || !data) {
     console.error("daily report phone data persistence failed", error);
     throw new Error("Le rapport physique est enregistré, mais les indicateurs téléphoniques n'ont pas pu être archivés");
   }
   return mergedReportData;
+}
+
+/**
+ * Keeps the archived replacement snapshot in step with the current snapshot.
+ * Initial snapshots have no regeneration-audit row, so absence is expected.
+ */
+async function archiveDailyReportPhoneDataInAudit(
+  snapshotId: string,
+  version: number,
+  phoneData: DailyReportPhoneData,
+  teamName?: string,
+  reportDate?: string,
+  required = false,
+): Promise<void> {
+  const { data: auditRecord, error: auditReadError } = await supabase.from("daily_report_regeneration_audit")
+    .select("id, replacement_snapshot")
+    .eq("report_id", snapshotId)
+    .eq("replacement_version", version)
+    .maybeSingle();
+  if (auditReadError) throw new Error("Impossible de lire l'historique de régénération du rapport");
+  if (!auditRecord) {
+    if (required) throw new Error("Impossible de retrouver l'archive de la version régénérée");
+    return;
+  }
+
+  const replacementSnapshot = auditRecord.replacement_snapshot && typeof auditRecord.replacement_snapshot === "object"
+    ? auditRecord.replacement_snapshot as Record<string, unknown>
+    : {};
+  const replacementReportData = replacementSnapshot.report_data && typeof replacementSnapshot.report_data === "object" && !Array.isArray(replacementSnapshot.report_data)
+    ? replacementSnapshot.report_data as Record<string, unknown>
+    : {};
+  const nextReplacementSnapshot: Record<string, unknown> = {
+    ...replacementSnapshot,
+    report_data: { ...replacementReportData, telephone: phoneData },
+  };
+  if (teamName && reportDate && isDailyReportData(replacementReportData)) {
+    nextReplacementSnapshot.analytical_comment = dailyReportComment(teamName, reportDate, replacementReportData, phoneData);
+  }
+  const { data, error: auditUpdateError } = await supabase.from("daily_report_regeneration_audit")
+    .update({ replacement_snapshot: nextReplacementSnapshot })
+    .eq("id", auditRecord.id)
+    .select("id")
+    .maybeSingle();
+  if (auditUpdateError || !data) {
+    throw new Error("Impossible d'archiver les indicateurs téléphoniques dans l'historique de régénération");
+  }
+}
+
+/**
+ * Repairs legacy snapshots created before phone-call indicators were archived.
+ * The existing physical visit totals, conversion rate and version are preserved.
+ * Only the telephone block (and the analytical sentence describing it) is added.
+ */
+async function ensureDailyReportPhoneDataArchived(
+  teamId: string,
+  reportDate: string,
+  teamName: string,
+  snapshot: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const currentReportData = snapshot.report_data && typeof snapshot.report_data === "object" && !Array.isArray(snapshot.report_data)
+    ? snapshot.report_data as Record<string, unknown>
+    : {};
+  const currentPhoneData = currentReportData.telephone;
+  const phoneDataIsValid = isDailyReportPhoneData(currentPhoneData);
+  const hasPhoneInComment = typeof snapshot.analytical_comment === "string"
+    && snapshot.analytical_comment.includes("appel");
+  if (phoneDataIsValid && hasPhoneInComment) return snapshot;
+
+  const phoneData = phoneDataIsValid
+    ? currentPhoneData
+    : await buildDailyReportPhoneData(teamId, reportDate);
+  const enrichedReportData = await saveDailyReportPhoneData(
+    String(snapshot.id), currentReportData, phoneData, teamName, reportDate,
+  );
+  const version = Number(snapshot.version);
+  if (Number.isSafeInteger(version) && version > 1) {
+    await archiveDailyReportPhoneDataInAudit(String(snapshot.id), version, phoneData, teamName, reportDate);
+  }
+  const nextSnapshot: Record<string, unknown> = { ...snapshot, report_data: enrichedReportData };
+  if (isDailyReportData(currentReportData)) {
+    nextSnapshot.analytical_comment = dailyReportComment(teamName, reportDate, currentReportData, phoneData);
+  }
+  return nextSnapshot;
 }
 
 function getPhoneTotalsFromSnapshot(snapshot: Record<string, unknown> | null): { total: number; sale_realized: number; sale_not_realized: number } | null {
@@ -1277,13 +1398,20 @@ async function handleRoute(req: Request): Promise<Response> {
           .maybeSingle();
         return { data, error };
       };
-      const loadSnapshot = async (teamId: string, date: string) => {
+      const loadSnapshot = async (teamId: string, date: string, teamName: string) => {
         const { data, error } = await supabase.from("daily_report_snapshots")
           .select("*")
           .eq("team_id", teamId)
           .eq("report_date", date)
           .maybeSingle();
-        return { data, error };
+        if (error || !data) return { data, error };
+
+        // Legacy snapshots are enriched on read so admins do not need to create
+        // an unnecessary new report version just to display phone-call metrics.
+        const enrichedSnapshot = await ensureDailyReportPhoneDataArchived(
+          teamId, date, team.name, data as Record<string, unknown>,
+        );
+        return { data: enrichedSnapshot, error: null };
       };
       const compareComment = (
         first: Record<string, unknown> | null,
@@ -1325,7 +1453,7 @@ async function handleRoute(req: Request): Promise<Response> {
         const { data: team, error: teamError } = await loadTeam(teamId);
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
-        const { data: snapshot, error } = await loadSnapshot(teamId, date);
+        const { data: snapshot, error } = await loadSnapshot(teamId, date, team.name);
         if (error) return jsonError(500, "Impossible de charger l'instantané");
         if (!snapshot) return jsonResponse({ snapshot: null, audit: [] });
         const { data: audit, error: auditError } = await fetchAllRows((from, to) => supabase.from("daily_report_regeneration_audit")
@@ -1348,8 +1476,8 @@ async function handleRoute(req: Request): Promise<Response> {
         if (teamError) return jsonError(500, "Impossible de vérifier l'équipe");
         if (!team) return jsonError(404, "Équipe introuvable");
         const [firstResult, secondResult] = await Promise.all([
-          loadSnapshot(teamId, firstDate),
-          loadSnapshot(teamId, secondDate),
+          loadSnapshot(teamId, firstDate, team.name),
+          loadSnapshot(teamId, secondDate, team.name),
         ]);
         if (firstResult.error || secondResult.error) return jsonError(500, "Impossible de charger les instantanés");
         return jsonResponse({
@@ -1399,7 +1527,7 @@ async function handleRoute(req: Request): Promise<Response> {
         if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été créé mais ne peut pas être relu");
         let enrichedReportData: Record<string, unknown>;
         try {
-          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData);
+          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData, team.name, date);
         } catch (error) {
           console.error("daily report phone enrichment failed", error);
           return jsonError(500, error instanceof Error ? error.message : "Impossible d'archiver les indicateurs téléphoniques");
@@ -1450,7 +1578,7 @@ async function handleRoute(req: Request): Promise<Response> {
         if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été régénéré mais ne peut pas être relu");
         let enrichedReportData: Record<string, unknown>;
         try {
-          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData);
+          enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData, team.name, date);
           const { data: auditRecord, error: auditReadError } = await supabase.from("daily_report_regeneration_audit")
             .select("id, replacement_snapshot")
             .eq("report_id", snapshotId)
