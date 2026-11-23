@@ -583,6 +583,51 @@ function todayInPortoNovo(): string {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
+interface PeriodFilter {
+  startIso: string | null;
+  endIso: string | null;
+  error: string | null;
+}
+
+/**
+ * Reads an optional civil-date range in the Benin business timezone.
+ * date_start is inclusive; date_end is inclusive for the caller and is
+ * converted here to an exclusive midnight boundary for PostgREST queries.
+ */
+function readPeriodFilter(url: URL): PeriodFilter {
+  const startDate = url.searchParams.get("date_start");
+  const endDate = url.searchParams.get("date_end");
+
+  if (startDate && !isIsoReportDate(startDate)) {
+    return { startIso: null, endIso: null, error: "Date de début invalide" };
+  }
+  if (endDate && !isIsoReportDate(endDate)) {
+    return { startIso: null, endIso: null, error: "Date de fin invalide" };
+  }
+  if (startDate && endDate && startDate > endDate) {
+    return {
+      startIso: null,
+      endIso: null,
+      error: "La date de début doit précéder la date de fin",
+    };
+  }
+
+  let endExclusiveIso: string | null = null;
+  if (endDate) {
+    const [year, month, day] = endDate.split("-").map(Number);
+    const nextDate = new Date(Date.UTC(year, month - 1, day + 1))
+      .toISOString()
+      .slice(0, 10);
+    endExclusiveIso = portoNovoMidnight(nextDate).toISOString();
+  }
+
+  return {
+    startIso: startDate ? portoNovoMidnight(startDate).toISOString() : null,
+    endIso: endExclusiveIso,
+    error: null,
+  };
+}
+
 function classifyDailyReportVisit(visit: { status: string | null; vente_status: string | null }): keyof Omit<DailyReportRow, "commercial_id" | "commercial_name_at_generation" | "total"> | null {
   if (visit.status === "out_of_zone" || visit.vente_status === "out_of_zone") return "out_of_zone";
   if (visit.status === "confirmed" && visit.vente_status === "confirmed") return "presence_confirmed";
@@ -2876,18 +2921,26 @@ async function handleRoute(req: Request): Promise<Response> {
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
       const dateFilter = readPeriodFilter(url);
+      if (dateFilter.error) return jsonError(400, dateFilter.error);
+
       let query = supabase
         .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
           commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
-      if (dateFilter) {
-        query = query.gte("visited_at", dateFilter.startIso);
-        if (dateFilter.endIso) query = query.lt("visited_at", dateFilter.endIso);
-      }
+      if (dateFilter.startIso) query = query.gte("visited_at", dateFilter.startIso);
+      if (dateFilter.endIso) query = query.lt("visited_at", dateFilter.endIso);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error, count } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      return jsonResponse({ data, count: count || 0, page, pageSize });
+      if (error) {
+        console.error("GET /visites failed", {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        return jsonError(500, "Erreur lors de la lecture des visites");
+      }
+      return jsonResponse({ data: data || [], count: count || 0, page, pageSize });
     }
 
     // --- ALL PROMESSES (admin) ---
@@ -2897,18 +2950,26 @@ async function handleRoute(req: Request): Promise<Response> {
       const pageSize = Math.min(parseInt(url.searchParams.get("pageSize") || "50"), 200);
       const offset = (page - 1) * pageSize;
       const dateFilter = readPeriodFilter(url);
+      if (dateFilter.error) return jsonError(400, dateFilter.error);
+
       let query = supabase
         .from("promesses_achat").select(`id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations, created_at,
           superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
-      if (dateFilter) {
-        query = query.gte("created_at", dateFilter.startIso);
-        if (dateFilter.endIso) query = query.lt("created_at", dateFilter.endIso);
-      }
+      if (dateFilter.startIso) query = query.gte("created_at", dateFilter.startIso);
+      if (dateFilter.endIso) query = query.lt("created_at", dateFilter.endIso);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
       const { data, error, count } = await query;
-      if (error) return jsonError(500, "Erreur de lecture");
-      return jsonResponse({ data, count: count || 0, page, pageSize });
+      if (error) {
+        console.error("GET /promesses failed", {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        return jsonError(500, "Erreur lors de la lecture des promesses");
+      }
+      return jsonResponse({ data: data || [], count: count || 0, page, pageSize });
     }
 
     // --- ALL VENTES (admin) ---
