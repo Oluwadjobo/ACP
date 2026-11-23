@@ -20,6 +20,7 @@ export function TourneeDetail() {
 
   const homePath = userType === "superviseur" ? "/superviseur" : userType === "agent_livreur" ? "/agent-livreur" : "/commercial";
   const tourneesPath = userType === "superviseur" ? "/superviseur/tournees" : userType === "agent_livreur" ? "/agent-livreur/tournees" : "/commercial/tournees";
+  const isCommercial = userType === "commercial";
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" /></div>;
@@ -44,7 +45,8 @@ export function TourneeDetail() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className={isCommercial ? "flex flex-col" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {!isCommercial && (
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button onClick={() => navigate(tourneesPath)} className="btn-ghost text-white hover:bg-white/10 p-1.5 rounded-lg"><ChevronLeft size={20} /></button>
@@ -52,6 +54,7 @@ export function TourneeDetail() {
         </div>
         <button onClick={() => navigate(homePath)} className="btn-ghost text-white hover:bg-white/10 px-3 py-1.5 rounded-lg text-sm">Accueil</button>
       </header>
+      )}
 
       <div className="bg-white border-b border-gray-100 px-4 py-4">
         <div className="flex items-center gap-3 mb-3">

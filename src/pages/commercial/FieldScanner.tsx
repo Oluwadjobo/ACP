@@ -18,6 +18,7 @@ export function FieldScanner() {
   const { fullName, userType, hasPermission, logout } = useAuth();
   const navigate = useNavigate();
   const isSuperviseur = userType === "superviseur";
+  const isCommercial = userType === "commercial";
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -278,7 +279,8 @@ export function FieldScanner() {
   const roleLabel = isSuperviseur ? "Team Leader" : "Commercial";
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className={isCommercial ? "flex flex-col" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {!isCommercial && (
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><ScanLine size={20} /><span className="font-bold text-sm">Contrôle Présence</span></div>
         <div className="flex items-center gap-1">
@@ -293,11 +295,14 @@ export function FieldScanner() {
           )}
         </div>
       </header>
+      )}
 
+      {!isCommercial && (
       <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3">
         <div className="w-9 h-9 rounded-full bg-primary-100 flex items-center justify-center text-sm font-bold text-primary-700">{fullName?.charAt(0).toUpperCase()}</div>
         <div><p className="text-sm font-semibold text-gray-900">{fullName}</p><p className="text-xs text-gray-500">{roleLabel}</p></div>
       </div>
+      )}
 
       <main className="flex-1 flex flex-col items-center justify-center px-4 py-6">
         {state === "idle" && !error && (
@@ -705,9 +710,11 @@ export function FieldScanner() {
         )}
       </main>
 
+      {!isCommercial && (
       <footer className="px-4 py-3 border-t border-gray-100 bg-white">
         <button onClick={async () => { stopCamera(); await logout(); window.location.href = "/"; }} className="btn-ghost w-full text-gray-500 text-sm">Se déconnecter</button>
       </footer>
+      )}
       <CreatePointVenteModal open={showCreateModal} onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); reset(); }} />
     </div>
   );

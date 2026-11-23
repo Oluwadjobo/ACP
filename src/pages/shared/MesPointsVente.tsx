@@ -30,6 +30,7 @@ export function MesPointsVente() {
 
   const homePath = userType === "superviseur" ? "/superviseur" : userType === "agent_livreur" ? "/agent-livreur" : "/commercial";
   const canRecordPhoneOrder = userType === "commercial" && hasPermission("record_vente");
+  const isCommercial = userType === "commercial";
 
   const filtered = useMemo(() => {
     let result = points;
@@ -92,11 +93,13 @@ export function MesPointsVente() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className={isCommercial ? "flex flex-col" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {!isCommercial && (
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><Store size={20} /><span className="font-bold text-sm">Mes points de vente</span></div>
         <button onClick={() => navigate(homePath)} className="btn-ghost text-white hover:bg-white/10 px-3 py-1.5 rounded-lg text-sm">Retour</button>
       </header>
+      )}
 
       <div className="bg-white border-b border-gray-100 px-4 py-3 space-y-3">
         <div className="relative">

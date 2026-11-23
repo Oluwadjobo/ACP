@@ -3,6 +3,7 @@ import { Search, MapPin, Navigation, Store, Loader2, ArrowLeft, X } from "lucide
 import { api } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 import { formatPointVenteAddress } from "@/lib/format";
+import { useAuth } from "@/lib/auth";
 
 interface SearchResult {
   id: string;
@@ -18,6 +19,8 @@ interface SearchResult {
 }
 
 export function PointVenteSearch() {
+  const { userType } = useAuth();
+  const isCommercial = userType === "commercial";
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,7 +58,8 @@ export function PointVenteSearch() {
 
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
+    <div className={isCommercial ? "pb-4" : "min-h-screen bg-gray-50 pb-20"}>
+      {!isCommercial && (
       <div className="bg-primary-900 text-white px-4 py-5 sticky top-0 z-20">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
           <button onClick={() => window.history.back()} className="p-1.5 -ml-1.5 rounded-lg hover:bg-white/10 transition-colors">
@@ -67,6 +71,7 @@ export function PointVenteSearch() {
           </div>
         </div>
       </div>
+      )}
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
         {toast && <Toast message={toast} onClose={() => setToast(null)} />}

@@ -25,6 +25,7 @@ export function MesTournees() {
 
   const homePath = userType === "superviseur" ? "/superviseur" : userType === "agent_livreur" ? "/agent-livreur" : "/commercial";
   const detailPath = userType === "superviseur" ? "/superviseur/tournee" : userType === "agent_livreur" ? "/agent-livreur/tournee" : "/commercial/tournee";
+  const isCommercial = userType === "commercial";
 
   const filtered = filter === "all" ? tournees : tournees.filter((t) => t.statut === filter);
 
@@ -33,11 +34,13 @@ export function MesTournees() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className={isCommercial ? "flex flex-col" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {!isCommercial && (
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2"><MapPin size={20} /><span className="font-bold text-sm">Mes tournées</span></div>
         <button onClick={() => navigate(homePath)} className="btn-ghost text-white hover:bg-white/10 px-3 py-1.5 rounded-lg text-sm">Retour</button>
       </header>
+      )}
 
       <div className="bg-white border-b border-gray-100 px-4 py-3 flex gap-2 overflow-x-auto">
         {["all", "a_venir", "en_cours", "terminee"].map((f) => (

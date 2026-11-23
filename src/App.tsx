@@ -5,6 +5,7 @@ import { TeamSelectionPage } from "@/pages/TeamSelectionPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { AdminLayout } from "@/components/AdminLayout";
+import { FieldLayout } from "@/components/FieldLayout";
 import { AdminDashboard } from "@/pages/admin/AdminDashboard";
 import { AdminCommerciaux } from "@/pages/admin/AdminCommerciaux";
 import { AdminSuperviseurs } from "@/pages/admin/AdminSuperviseurs";
@@ -121,11 +122,11 @@ function AppRoutes() {
       <Route path="/admin/points-vente" element={<ProtectedRoute allow="admin" permission="manage_points_vente"><AdminLayout><AdminPointsVente /></AdminLayout></ProtectedRoute>} />
 
       {/* Commercial routes */}
-      <Route path="/commercial" element={<ProtectedRoute allow="commercial" permission="scan"><FieldScanner /></ProtectedRoute>} />
-      <Route path="/commercial/historique" element={<ProtectedRoute allow="commercial" permission="view_history"><FieldHistory /></ProtectedRoute>} />
-      <Route path="/commercial/tournees" element={<ProtectedRoute allow="commercial"><MesTournees /></ProtectedRoute>} />
-      <Route path="/commercial/tournee/:id" element={<ProtectedRoute allow="commercial"><TourneeDetail /></ProtectedRoute>} />
-      <Route path="/commercial/points-vente" element={<ProtectedRoute allow="commercial"><MesPointsVente /></ProtectedRoute>} />
+      <Route path="/commercial" element={<ProtectedRoute allow="commercial" permission="scan"><FieldLayout><FieldScanner /></FieldLayout></ProtectedRoute>} />
+      <Route path="/commercial/historique" element={<ProtectedRoute allow="commercial" permission="view_history"><FieldLayout><FieldHistory /></FieldLayout></ProtectedRoute>} />
+      <Route path="/commercial/tournees" element={<ProtectedRoute allow="commercial"><FieldLayout><MesTournees /></FieldLayout></ProtectedRoute>} />
+      <Route path="/commercial/tournee/:id" element={<ProtectedRoute allow="commercial"><FieldLayout><TourneeDetail /></FieldLayout></ProtectedRoute>} />
+      <Route path="/commercial/points-vente" element={<ProtectedRoute allow="commercial"><FieldLayout><MesPointsVente /></FieldLayout></ProtectedRoute>} />
 
       {/* Superviseur routes */}
       <Route path="/superviseur" element={<ProtectedRoute allow="superviseur" permission="scan"><FieldScanner /></ProtectedRoute>} />
@@ -138,7 +139,7 @@ function AppRoutes() {
       <Route path="/superviseur/points-vente" element={<ProtectedRoute allow="superviseur"><MesPointsVente /></ProtectedRoute>} />
 
       {/* Commercial routes - search */}
-      <Route path="/commercial/recherche" element={<ProtectedRoute allow="commercial" permission="search_point_vente"><PointVenteSearch /></ProtectedRoute>} />
+      <Route path="/commercial/recherche" element={<ProtectedRoute allow="commercial" permission="search_point_vente"><FieldLayout><PointVenteSearch /></FieldLayout></ProtectedRoute>} />
 
       {/* Agent livreur routes */}
       <Route path="/agent-livreur" element={<ProtectedRoute allow="agent_livreur" permission="view_commandes_livraison"><AgentLivreurCommandes /></ProtectedRoute>} />

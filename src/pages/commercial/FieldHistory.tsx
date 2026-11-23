@@ -13,6 +13,7 @@ export function FieldHistory() {
   const [loading, setLoading] = useState(true);
 
   const homePath = userType === "superviseur" ? "/superviseur" : "/commercial";
+  const isCommercial = userType === "commercial";
 
   useEffect(() => {
     api.myVisites().then(setVisites).finally(() => setLoading(false));
@@ -49,11 +50,13 @@ export function FieldHistory() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className={isCommercial ? "flex flex-col" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {!isCommercial && (
       <header className="bg-primary-900 text-white px-4 py-3 flex items-center gap-3">
         <button onClick={() => navigate(homePath)} className="btn-ghost text-white hover:bg-white/10 p-2 rounded-lg"><ArrowLeft size={20} /></button>
         <div className="flex items-center gap-2"><History size={20} /><span className="font-bold text-sm">Mes visites</span></div>
       </header>
+      )}
 
       <main className="flex-1 px-4 py-6 max-w-2xl mx-auto w-full">
         {loading ? (
