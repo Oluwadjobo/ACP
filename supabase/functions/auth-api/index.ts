@@ -849,55 +849,11 @@ async function saveDailyReportPhoneData(
 }
 
 /**
- * Keeps the archived replacement snapshot in step with the current snapshot.
- * Initial snapshots have no regeneration-audit row, so absence is expected.
- */
-async function archiveDailyReportPhoneDataInAudit(
-  snapshotId: string,
-  version: number,
-  phoneData: DailyReportPhoneData,
-  teamName?: string,
-  reportDate?: string,
-  required = false,
-): Promise<void> {
-  const { data: auditRecord, error: auditReadError } = await supabase.from("daily_report_regeneration_audit")
-    .select("id, replacement_snapshot")
-    .eq("report_id", snapshotId)
-    .eq("replacement_version", version)
-    .maybeSingle();
-  if (auditReadError) throw new Error("Impossible de lire l'historique de régénération du rapport");
-  if (!auditRecord) {
-    if (required) throw new Error("Impossible de retrouver l'archive de la version régénérée");
-    return;
-  }
-
-  const replacementSnapshot = auditRecord.replacement_snapshot && typeof auditRecord.replacement_snapshot === "object"
-    ? auditRecord.replacement_snapshot as Record<string, unknown>
-    : {};
-  const replacementReportData = replacementSnapshot.report_data && typeof replacementSnapshot.report_data === "object" && !Array.isArray(replacementSnapshot.report_data)
-    ? replacementSnapshot.report_data as Record<string, unknown>
-    : {};
-  const nextReplacementSnapshot: Record<string, unknown> = {
-    ...replacementSnapshot,
-    report_data: { ...replacementReportData, telephone: phoneData },
-  };
-  if (teamName && reportDate && isDailyReportData(replacementReportData)) {
-    nextReplacementSnapshot.analytical_comment = dailyReportComment(teamName, reportDate, replacementReportData, phoneData);
-  }
-  const { data, error: auditUpdateError } = await supabase.from("daily_report_regeneration_audit")
-    .update({ replacement_snapshot: nextReplacementSnapshot })
-    .eq("id", auditRecord.id)
-    .select("id")
-    .maybeSingle();
-  if (auditUpdateError || !data) {
-    throw new Error("Impossible d'archiver les indicateurs téléphoniques dans l'historique de régénération");
-  }
-}
-
-/**
- * Repairs legacy snapshots created before phone-call indicators were archived.
- * The existing physical visit totals, conversion rate and version are preserved.
- * Only the telephone block (and the analytical sentence describing it) is added.
+ * Enriches legacy snapshots on read so the admin sees phone-call indicators.
+ * Non-destructive: the snapshot row in the database is never modified on read.
+ * Only the generate/regenerate routes persist the telephone block via
+ * saveDailyReportPhoneData. This preserves historical snapshots (including
+ * version > 1 and already-validated reports) exactly as they were created.
  */
 async function ensureDailyReportPhoneDataArchived(
   teamId: string,
@@ -909,21 +865,10 @@ async function ensureDailyReportPhoneDataArchived(
     ? snapshot.report_data as Record<string, unknown>
     : {};
   const currentPhoneData = currentReportData.telephone;
-  const phoneDataIsValid = isDailyReportPhoneData(currentPhoneData);
-  const hasPhoneInComment = typeof snapshot.analytical_comment === "string"
-    && snapshot.analytical_comment.includes("appel");
-  if (phoneDataIsValid && hasPhoneInComment) return snapshot;
+  if (isDailyReportPhoneData(currentPhoneData)) return snapshot;
 
-  const phoneData = phoneDataIsValid
-    ? currentPhoneData
-    : await buildDailyReportPhoneData(teamId, reportDate);
-  const enrichedReportData = await saveDailyReportPhoneData(
-    String(snapshot.id), currentReportData, phoneData, teamName, reportDate,
-  );
-  const version = Number(snapshot.version);
-  if (Number.isSafeInteger(version) && version > 1) {
-    await archiveDailyReportPhoneDataInAudit(String(snapshot.id), version, phoneData, teamName, reportDate);
-  }
+  const phoneData = await buildDailyReportPhoneData(teamId, reportDate);
+  const enrichedReportData = { ...currentReportData, telephone: phoneData };
   const nextSnapshot: Record<string, unknown> = { ...snapshot, report_data: enrichedReportData };
   if (isDailyReportData(currentReportData)) {
     nextSnapshot.analytical_comment = dailyReportComment(teamName, reportDate, currentReportData, phoneData);

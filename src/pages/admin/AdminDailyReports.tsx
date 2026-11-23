@@ -284,7 +284,14 @@ export function AdminDailyReports() {
       if (mode === "daily") await loadDaily();
       else await loadComparison();
     } catch (cause) {
-      setError((cause as Error).message || "La création de l'instantané a échoué");
+      const message = (cause as Error).message || "La création de l'instantané a échoué";
+      if (message.includes("existe déjà")) {
+        setNotice(`Un instantané existe déjà pour le ${formatReportDate(date)}. Affichage en cours.`);
+        if (mode === "daily") await loadDaily();
+        else await loadComparison();
+      } else {
+        setError(message);
+      }
     } finally {
       setBusy(false);
     }

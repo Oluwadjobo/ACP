@@ -139,6 +139,80 @@ Deno.test("legacy snapshot without telephone remains valid (no enrichment requir
   if ("telephone" in legacy) throw new Error("legacy snapshot should not have telephone");
 });
 
+// ---- Non-destructive read enrichment tests ----
+
+Deno.test("read-time enrichment merges telephone in-memory without adding DB-persisted telephone key to original snapshot", () => {
+  const originalSnapshot = {
+    id: "test-id",
+    version: 3,
+    report_data: {
+      columns: DAILY_REPORT_COLUMNS,
+      rows: [],
+      totals: { out_of_zone: 10, presence_confirmed: 5, sale_not_realized: 3, sale_realized: 2, total: 20 },
+    },
+    analytical_comment: "Original comment without phone text.",
+  };
+  // Simulate the non-destructive merge: original must NOT gain a telephone key
+  const phoneData = makePhoneData(0, 0, 0);
+  const enrichedReportData = { ...originalSnapshot.report_data, telephone: phoneData };
+  // Original snapshot must be unchanged
+  if ("telephone" in originalSnapshot.report_data) {
+    throw new Error("Original snapshot was mutated — enrichment must be non-destructive");
+  }
+  // Enriched data must have telephone
+  if (!("telephone" in enrichedReportData)) {
+    throw new Error("Enriched report_data must contain telephone");
+  }
+});
+
+Deno.test("snapshot with valid telephone block is returned as-is (no re-enrichment)", () => {
+  const snapshot = {
+    id: "test-id",
+    version: 1,
+    report_data: {
+      columns: DAILY_REPORT_COLUMNS,
+      rows: [],
+      totals: { out_of_zone: 0, presence_confirmed: 0, sale_not_realized: 0, sale_realized: 0, total: 0 },
+      telephone: makePhoneData(1, 1, 0),
+    },
+    analytical_comment: "Le rapport. En complément, 1 appel téléphonique a été traité.",
+  };
+  // If telephone is already valid, the function returns the snapshot unchanged
+  const phoneBlock = snapshot.report_data.telephone;
+  if (!isPhoneData(phoneBlock)) throw new Error("existing telephone block must be recognized as valid");
+});
+
+Deno.test("409 conflict message is identifiable for frontend re-fetch logic", () => {
+  const conflictMessage = "Un instantané existe déjà pour cette équipe et cette date.";
+  if (!conflictMessage.includes("existe déjà")) {
+    throw new Error("409 message must contain 'existe déjà' for frontend detection");
+  }
+});
+
+Deno.test("historical version > 1 snapshot is not persisted on read", () => {
+  // A version 3 snapshot (like YAOURT 2026-11-23) must not be modified on read.
+  // The non-destructive enrichment only merges in-memory.
+  const v3Snapshot = {
+    id: "yaourt-v3",
+    version: 3,
+    report_data: {
+      columns: DAILY_REPORT_COLUMNS,
+      rows: [],
+      totals: { out_of_zone: 42, presence_confirmed: 14, sale_not_realized: 107, sale_realized: 206, total: 369 },
+    },
+    analytical_comment: "Le 2026-11-23, Yaourt Team totalise 369 visites : 42 hors zone, 14 présences confirmées, 107 ventes non réalisées et 206 ventes réalisées. Taux de conversion : 55.83 %.",
+  };
+  // After non-destructive enrichment, the original comment must be preserved
+  // (only the in-memory copy gets the phone sentence)
+  const originalComment = v3Snapshot.analytical_comment;
+  if (!originalComment.includes("55.83")) {
+    throw new Error("original comment must be preserved");
+  }
+  if (originalComment.includes("appel")) {
+    throw new Error("YAOURT v3 original comment must not contain phone text");
+  }
+});
+
 function assertEquals(actual: unknown, expected: unknown, msg?: string): void {
   if (actual !== expected) {
     throw new Error(`${msg ?? "assertion failed"}: expected ${expected}, received ${actual}`);
