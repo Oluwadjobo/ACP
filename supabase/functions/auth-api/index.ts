@@ -1460,10 +1460,19 @@ async function handleRoute(req: Request): Promise<Response> {
 
         // Legacy snapshots are enriched on read so admins do not need to create
         // an unnecessary new report version just to display phone-call metrics.
-        const enrichedSnapshot = await ensureDailyReportPhoneDataArchived(
-          teamId, date, teamName, data as Record<string, unknown>,
-        );
-        return { data: enrichedSnapshot, error: null };
+        // If enrichment fails, the physical report is still returned so the
+        // admin can read it — phone indicators simply remain absent.
+        try {
+          const enrichedSnapshot = await ensureDailyReportPhoneDataArchived(
+            teamId, date, teamName, data as Record<string, unknown>,
+          );
+          return { data: enrichedSnapshot, error: null };
+        } catch (enrichmentError) {
+          console.error("daily report phone enrichment failed on read", {
+            snapshotId: data.id, teamId, date, error: enrichmentError,
+          });
+          return { data: data as Record<string, unknown>, error: null };
+        }
       };
       const compareComment = (
         first: Record<string, unknown> | null,
