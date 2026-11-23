@@ -109,7 +109,10 @@ const DASHBOARD_PERMISSIONS = [
 
 const ALL_PERMISSIONS = [...FIELD_PERMISSIONS, ...AGENT_LIVREUR_PERMISSIONS, ...DASHBOARD_PERMISSIONS];
 
-const DEFAULT_ADMIN_PERMS: Record<string, boolean> = Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, true]));
+// Regular admins default to NO permissions when their permissions column is NULL/absent.
+// Only the super_admin bypasses permission checks (via requireAnyAdminPermission).
+// This enforces the principle of least privilege: an admin must be explicitly granted permissions.
+const DEFAULT_ADMIN_PERMS: Record<string, boolean> = Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, false]));
 const DEFAULT_SUPERVISEUR_PERMS: Record<string, boolean> = Object.fromEntries(
   ["scan", "create_point_vente", "record_vente", "create_promesse", "control_terrain", "view_history", "view_ventes_non_realisees", "search_point_vente", "navigate_to_point_vente"].map((p) => [p, true])
 );
@@ -122,11 +125,15 @@ const DEFAULT_AGENT_LIVREUR_PERMS: Record<string, boolean> = Object.fromEntries(
 
 type UserType = "admin" | "commercial" | "superviseur" | "agent_livreur";
 
+function buildDefaultPermissions(activePerms: string[]): Record<string, boolean> {
+  return Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, activePerms.includes(p)]));
+}
+
 function getDefaultPermissions(userType: UserType): Record<string, boolean> {
   if (userType === "admin") return { ...DEFAULT_ADMIN_PERMS };
-  if (userType === "superviseur") return { ...DEFAULT_SUPERVISEUR_PERMS };
-  if (userType === "agent_livreur") return { ...DEFAULT_AGENT_LIVREUR_PERMS };
-  return { ...DEFAULT_COMMERCIAL_PERMS };
+  if (userType === "superviseur") return buildDefaultPermissions(Object.keys(DEFAULT_SUPERVISEUR_PERMS));
+  if (userType === "agent_livreur") return buildDefaultPermissions(Object.keys(DEFAULT_AGENT_LIVREUR_PERMS));
+  return buildDefaultPermissions(Object.keys(DEFAULT_COMMERCIAL_PERMS));
 }
 
 function normalizePermissions(raw: unknown, userType: UserType): Record<string, boolean> {
@@ -1433,7 +1440,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (adminRole !== "super_admin") return jsonError(403, "Réservé au super administrateur");
 
       const reportDate = (value: string | null) => isIsoReportDate(value);
-      const validTeamId = (value: string | null) =>
+      const validTeamId = (value: string | null): value is string =>
         Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
       const loadTeam = async (id: string) => {
         const { data, error } = await supabase.from("teams")
@@ -1724,7 +1731,7 @@ async function handleRoute(req: Request): Promise<Response> {
         .eq("id", targetId).maybeSingle();
       if (profileResult.error) return jsonError(500, "Erreur lors de la lecture du profil");
       if (!profileResult.data) return jsonError(404, "Agent introuvable");
-      const profile = profileResult.data as Record<string, unknown>;
+      const profile = profileResult.data as unknown as Record<string, unknown>;
       const actorColumn = targetType === "commercial" ? "commercial_id" : "superviseur_id";
       const visitResult = targetType === "agent_livreur"
         ? { data: [], error: null }
@@ -2131,7 +2138,7 @@ async function handleRoute(req: Request): Promise<Response> {
         return jsonError(400, "Confirmation ou sélection invalide");
       }
       const selectedCount = Object.values(selected as Record<string, unknown>)
-        .reduce((total, ids) => total + (Array.isArray(ids) ? ids.length : 0), 0);
+        .reduce<number>((total, ids) => total + (Array.isArray(ids) ? ids.length : 0), 0);
       if (selectedCount === 0) return jsonError(400, "Sélectionnez au moins un élément");
       if (selectedCount >= 10 && secondConfirmation !== "SUPPRIMER DÉFINITIVEMENT") {
         return jsonError(400, "La seconde confirmation est requise pour dix éléments ou plus");
@@ -2321,6 +2328,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
       const { data, error } = await supabase.from("commerciaux").insert(insertData).select("id, identifiant, full_name, active, telephone, superviseur_id, team_id, created_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la création"); }
+      if (!data) return jsonError(500, "Le commercial a été créé mais ne peut pas être relu");
       const assignments = secteur_ids.map((secteur_id: string) => ({ commercial_id: data.id, secteur_id, ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}) }));
       const { error: assignmentError } = await supabase.from("commercial_tournees").insert(assignments);
       if (assignmentError) return jsonError(500, "Erreur lors de l'affectation des tournées");
@@ -2414,6 +2422,7 @@ async function handleRoute(req: Request): Promise<Response> {
       if (effectiveTeamId) insertData.team_id = effectiveTeamId;
       const { data, error } = await supabase.from("superviseurs").insert(insertData).select("id, identifiant, full_name, active, telephone, created_at").maybeSingle();
       if (error) { if (error.code === "23505") return jsonError(409, "Cet identifiant existe déjà"); return jsonError(500, "Erreur lors de la création"); }
+      if (!data) return jsonError(500, "Le superviseur a été créé mais ne peut pas être relu");
       const tltData = secteur_ids.map((sid: string) => ({ superviseur_id: data.id, secteur_id: sid, ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}) }));
       await supabase.from("team_leader_tournees").insert(tltData);
       if (secteur_ids.length > 0) await supabase.from("superviseurs").update({ secteur_id: secteur_ids[0] }).eq("id", data.id);
@@ -2924,21 +2933,52 @@ async function handleRoute(req: Request): Promise<Response> {
       if (dateFilter.error) return jsonError(400, dateFilter.error);
 
       let query = supabase
-        .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role,
+        .from("visites").select(`id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role, commercial_id, superviseur_id, point_vente_id,
           commercial:commerciaux(full_name), superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
       if (dateFilter.startIso) query = query.gte("visited_at", dateFilter.startIso);
       if (dateFilter.endIso) query = query.lt("visited_at", dateFilter.endIso);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error, count } = await query;
+      const queryResult = await query;
+      let { data, count } = queryResult;
+      const { error } = queryResult;
       if (error) {
-        console.error("GET /visites failed", {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
+        console.error("GET /visites embedded query failed, retrying flat", {
+          code: error.code, message: error.message, details: error.details, hint: error.hint,
         });
-        return jsonError(500, "Erreur lors de la lecture des visites");
+        let flatQuery = supabase
+          .from("visites").select("id, visited_at, latitude, longitude, accuracy, distance_meters, status, vente_status, motif, user_role, commercial_id, superviseur_id, point_vente_id", { count: "exact" })
+          .order("visited_at", { ascending: false }).range(offset, offset + pageSize - 1);
+        if (dateFilter.startIso) flatQuery = flatQuery.gte("visited_at", dateFilter.startIso);
+        if (dateFilter.endIso) flatQuery = flatQuery.lt("visited_at", dateFilter.endIso);
+        if (effectiveTeamId) flatQuery = flatQuery.eq("team_id", effectiveTeamId);
+        const flatResult = await flatQuery;
+        if (flatResult.error) {
+          console.error("GET /visites flat query also failed", {
+            code: flatResult.error.code, message: flatResult.error.message,
+          });
+          return jsonError(500, "Erreur lors de la lecture des visites");
+        }
+        data = flatResult.data as unknown as typeof data;
+        count = flatResult.count;
+        const rows = (data || []) as Record<string, unknown>[];
+        const commercialIds = [...new Set(rows.map((r) => String(r.commercial_id || "")).filter(Boolean))];
+        const superviseurIds = [...new Set(rows.map((r) => String(r.superviseur_id || "")).filter(Boolean))];
+        const pointIds = [...new Set(rows.map((r) => String(r.point_vente_id || "")).filter(Boolean))];
+        const [commercialMap, superviseurMap, pointMap] = await Promise.all([
+          commercialIds.length ? fetchRowsForIds(commercialIds, (batch, from, to) => supabase.from("commerciaux").select("id, full_name").in("id", batch).range(from, to)) : Promise.resolve({ data: [], error: null }),
+          superviseurIds.length ? fetchRowsForIds(superviseurIds, (batch, from, to) => supabase.from("superviseurs").select("id, full_name").in("id", batch).range(from, to)) : Promise.resolve({ data: [], error: null }),
+          pointIds.length ? fetchRowsForIds(pointIds, (batch, from, to) => supabase.from("points_vente").select("id, name, city").in("id", batch).range(from, to)) : Promise.resolve({ data: [], error: null }),
+        ]);
+        const cMap = new Map((commercialMap.data as Record<string, unknown>[]).map((r) => [String(r.id), r.full_name]));
+        const sMap = new Map((superviseurMap.data as Record<string, unknown>[]).map((r) => [String(r.id), r.full_name]));
+        const pMap = new Map((pointMap.data as Record<string, unknown>[]).map((r) => [String(r.id), { name: r.name, city: r.city }]));
+        data = rows.map((r) => ({
+          ...r,
+          commercial: r.commercial_id ? { full_name: cMap.get(String(r.commercial_id)) || null } : null,
+          superviseur: r.superviseur_id ? { full_name: sMap.get(String(r.superviseur_id)) || null } : null,
+          point_vente: r.point_vente_id ? pMap.get(String(r.point_vente_id)) || null : null,
+        })) as unknown as typeof data;
       }
       return jsonResponse({ data: data || [], count: count || 0, page, pageSize });
     }
@@ -2953,21 +2993,48 @@ async function handleRoute(req: Request): Promise<Response> {
       if (dateFilter.error) return jsonError(400, dateFilter.error);
 
       let query = supabase
-        .from("promesses_achat").select(`id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations, created_at,
+        .from("promesses_achat").select(`id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations, created_at, superviseur_id, point_vente_id,
           superviseur:superviseurs(full_name), point_vente:points_vente(name, city)`, { count: "exact" })
         .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
       if (dateFilter.startIso) query = query.gte("created_at", dateFilter.startIso);
       if (dateFilter.endIso) query = query.lt("created_at", dateFilter.endIso);
       if (effectiveTeamId) query = query.eq("team_id", effectiveTeamId);
-      const { data, error, count } = await query;
+      const queryResult = await query;
+      let { data, count } = queryResult;
+      const { error } = queryResult;
       if (error) {
-        console.error("GET /promesses failed", {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
+        console.error("GET /promesses embedded query failed, retrying flat", {
+          code: error.code, message: error.message, details: error.details, hint: error.hint,
         });
-        return jsonError(500, "Erreur lors de la lecture des promesses");
+        let flatQuery = supabase
+          .from("promesses_achat").select("id, produits, quantite, date_previsionnelle, montant_estime, responsable, observations, created_at, superviseur_id, point_vente_id", { count: "exact" })
+          .order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+        if (dateFilter.startIso) flatQuery = flatQuery.gte("created_at", dateFilter.startIso);
+        if (dateFilter.endIso) flatQuery = flatQuery.lt("created_at", dateFilter.endIso);
+        if (effectiveTeamId) flatQuery = flatQuery.eq("team_id", effectiveTeamId);
+        const flatResult = await flatQuery;
+        if (flatResult.error) {
+          console.error("GET /promesses flat query also failed", {
+            code: flatResult.error.code, message: flatResult.error.message,
+          });
+          return jsonError(500, "Erreur lors de la lecture des promesses");
+        }
+        data = flatResult.data as unknown as typeof data;
+        count = flatResult.count;
+        const rows = (data || []) as Record<string, unknown>[];
+        const superviseurIds = [...new Set(rows.map((r) => String(r.superviseur_id || "")).filter(Boolean))];
+        const pointIds = [...new Set(rows.map((r) => String(r.point_vente_id || "")).filter(Boolean))];
+        const [superviseurMap, pointMap] = await Promise.all([
+          superviseurIds.length ? fetchRowsForIds(superviseurIds, (batch, from, to) => supabase.from("superviseurs").select("id, full_name").in("id", batch).range(from, to)) : Promise.resolve({ data: [], error: null }),
+          pointIds.length ? fetchRowsForIds(pointIds, (batch, from, to) => supabase.from("points_vente").select("id, name, city").in("id", batch).range(from, to)) : Promise.resolve({ data: [], error: null }),
+        ]);
+        const sMap = new Map((superviseurMap.data as Record<string, unknown>[]).map((r) => [String(r.id), r.full_name]));
+        const pMap = new Map((pointMap.data as Record<string, unknown>[]).map((r) => [String(r.id), { name: r.name, city: r.city }]));
+        data = rows.map((r) => ({
+          ...r,
+          superviseur: r.superviseur_id ? { full_name: sMap.get(String(r.superviseur_id)) || null } : null,
+          point_vente: r.point_vente_id ? pMap.get(String(r.point_vente_id)) || null : null,
+        })) as unknown as typeof data;
       }
       return jsonResponse({ data: data || [], count: count || 0, page, pageSize });
     }
@@ -3872,7 +3939,7 @@ async function handleRoute(req: Request): Promise<Response> {
         quantite: Number(l.quantite) || 1,
         prix_unitaire: 0,
         montant: 0,
-        observation: l.observation?.trim() || null,
+        observation: typeof l.observation === "string" ? l.observation.trim() || null : null,
         ...(userTeamId ? { team_id: userTeamId } : {}),
       }));
       const { error: lignesError } = await supabase.from("vente_lignes").insert(lignesData);
@@ -3896,7 +3963,7 @@ async function handleRoute(req: Request): Promise<Response> {
         produit_nom: validMap.get(String(l.produit_id)) || String(l.produit_nom || "").trim(),
         quantite: Number(l.quantite) || 1,
         unite: "unité",
-        observation: l.observation?.trim() || null,
+        observation: typeof l.observation === "string" ? l.observation.trim() || null : null,
         ...(userTeamId ? { team_id: userTeamId } : {}),
       }));
       await supabase.from("bl_lignes").insert(blLignesData);
@@ -4188,7 +4255,7 @@ async function handleRoute(req: Request): Promise<Response> {
         produit_nom: String(l.produit_nom).trim(),
         quantite: Number(l.quantite) || 1,
         unite: l.unite || "unité",
-        observation: l.observation?.trim() || null,
+        observation: typeof l.observation === "string" ? l.observation.trim() || null : null,
         ...(userTeamId ? { team_id: userTeamId } : {}),
       }));
       const { error: lignesError } = await supabase.from("commande_lignes").insert(lignesData);
@@ -4237,7 +4304,7 @@ async function handleRoute(req: Request): Promise<Response> {
 
     // --- MES TOURNEES (commercial + superviseur) ---
     if (path === "/mes-tournees" && method === "GET") {
-      if (userRole === "agent_livreur") {
+      if ((userRole as string) === "agent_livreur") {
         let commandesQuery = supabase.from("commandes").select("id, statut, secteur_id, created_at", { count: "exact" })
           .eq("agent_livreur_id", userId).order("created_at", { ascending: false });
         if (userTeamId) commandesQuery = commandesQuery.eq("team_id", userTeamId);
@@ -4482,7 +4549,7 @@ async function handleRoute(req: Request): Promise<Response> {
       const enriched = points.map((p: Record<string, unknown>) => {
         const pId = String(p.id);
         const lastVisite = visByPv.get(pId);
-        const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
+        const secteur = p.secteur_id ? secteurMap.get(String(p.secteur_id)) ?? null : null;
         return {
           id: p.id,
           code: p.code,

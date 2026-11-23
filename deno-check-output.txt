@@ -1,0 +1,82 @@
+[0m[32mCheck[0m supabase/functions/auth-api/index.ts
+[0m[1mTS2352 [0m[ERROR]: Conversion of type 'ParserError<"Unexpected input: " | "Unexpected input: , created_at">' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ error: true; } & "Unexpected input: , created_at"' is not comparable to type 'Record<string, unknown>'.
+    Index signature for type 'string' is missing in type '{ error: true; } & String'.
+      const profile = profileResult.data as Record<string, unknown>;
+[0m[31m                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m1734[0m:[0m[33m23[0m
+
+[0m[1mTS18046 [0m[ERROR]: 'total' is of type 'unknown'.
+        .reduce((total, ids) => total + (Array.isArray(ids) ? ids.length : 0), 0);
+[0m[31m                                ~~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2141[0m:[0m[33m33[0m
+
+[0m[1mTS18046 [0m[ERROR]: 'selectedCount' is of type 'unknown'.
+      if (selectedCount >= 10 && secondConfirmation !== "SUPPRIMER DÉFINITIVEMENT") {
+[0m[31m          ~~~~~~~~~~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2143[0m:[0m[33m11[0m
+
+[0m[1mTS18047 [0m[ERROR]: 'data' is possibly 'null'.
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2331[0m:[0m[33m85[0m
+
+[0m[1mTS18047 [0m[ERROR]: 'data' is possibly 'null'.
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2424[0m:[0m[33m75[0m
+
+[0m[1mTS18047 [0m[ERROR]: 'data' is possibly 'null'.
+      if (secteur_ids.length > 0) await supabase.from("superviseurs").update({ secteur_id: secteur_ids[0] }).eq("id", data.id);
+[0m[31m                                                                                                                      ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2426[0m:[0m[33m119[0m
+
+[0m[1mTS2322 [0m[ERROR]: Type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; }[]' is not assignable to type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; commercial: { ...; }[]; superviseur: { ...; }[]; point_vente: { ...; }[]; }[]'.
+  Type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; }' is missing the following properties from type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; commercial: { ...; }[]; superviseur: { ...; }[]; point_vente: { ...; }[]; }': commercial, superviseur, point_vente
+        data = flatResult.data;
+[0m[31m        ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2960[0m:[0m[33m9[0m
+
+[0m[1mTS2322 [0m[ERROR]: Type '{ commercial: { full_name: {} | null; } | null; superviseur: { full_name: {} | null; } | null; point_vente: { name: unknown; city: unknown; } | null; }[]' is not assignable to type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; commercial: { ...; }[]; superviseur: { ...; }[]; point_vente: { ...; }[]; }[]'.
+  Type '{ commercial: { full_name: {} | null; } | null; superviseur: { full_name: {} | null; } | null; point_vente: { name: unknown; city: unknown; } | null; }' is missing the following properties from type '{ id: any; visited_at: any; latitude: any; longitude: any; accuracy: any; distance_meters: any; status: any; vente_status: any; motif: any; user_role: any; commercial_id: any; superviseur_id: any; point_vente_id: any; commercial: { ...; }[]; superviseur: { ...; }[]; point_vente: { ...; }[]; }': id, visited_at, latitude, longitude, and 9 more.
+        data = rows.map((r) => ({
+[0m[31m        ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m2974[0m:[0m[33m9[0m
+
+[0m[1mTS2322 [0m[ERROR]: Type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; }[]' is not assignable to type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; superviseur: { ...; }[]; point_vente: { ...; }[]; }[]'.
+  Type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; }' is missing the following properties from type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; superviseur: { ...; }[]; point_vente: { ...; }[]; }': superviseur, point_vente
+        data = flatResult.data;
+[0m[31m        ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m3020[0m:[0m[33m9[0m
+
+[0m[1mTS2322 [0m[ERROR]: Type '{ superviseur: { full_name: {} | null; } | null; point_vente: { name: unknown; city: unknown; } | null; }[]' is not assignable to type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; superviseur: { ...; }[]; point_vente: { ...; }[]; }[]'.
+  Type '{ superviseur: { full_name: {} | null; } | null; point_vente: { name: unknown; city: unknown; } | null; }' is missing the following properties from type '{ id: any; produits: any; quantite: any; date_previsionnelle: any; montant_estime: any; responsable: any; observations: any; created_at: any; superviseur_id: any; point_vente_id: any; superviseur: { ...; }[]; point_vente: { ...; }[]; }': id, produits, quantite, date_previsionnelle, and 6 more.
+        data = rows.map((r) => ({
+[0m[31m        ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m3031[0m:[0m[33m9[0m
+
+[0m[1mTS2339 [0m[ERROR]: Property 'trim' does not exist on type '{}'.
+        observation: l.observation?.trim() || null,
+[0m[31m                                    ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m3940[0m:[0m[33m37[0m
+
+[0m[1mTS2339 [0m[ERROR]: Property 'trim' does not exist on type '{}'.
+        observation: l.observation?.trim() || null,
+[0m[31m                                    ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m3964[0m:[0m[33m37[0m
+
+[0m[1mTS2339 [0m[ERROR]: Property 'trim' does not exist on type '{}'.
+        observation: l.observation?.trim() || null,
+[0m[31m                                    ~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m4256[0m:[0m[33m37[0m
+
+[0m[1mTS2367 [0m[ERROR]: This comparison appears to be unintentional because the types '"commercial" | "superviseur"' and '"agent_livreur"' have no overlap.
+      if (userRole === "agent_livreur") {
+[0m[31m          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m4305[0m:[0m[33m11[0m
+
+[0m[1mTS7052 [0m[ERROR]: Element implicitly has an 'any' type because type 'Map<string, Record<string, unknown>>' has no index signature. Did you mean to call 'secteurMap.get'?
+        const secteur = p.secteur_id ? secteurMap[String(p.secteur_id)] ?? null : null;
+[0m[31m                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+    at [0m[36mfile:///tmp/cc-agent/69352004/project/supabase/functions/auth-api/index.ts[0m:[0m[33m4550[0m:[0m[33m40[0m
+
+Found 15 errors.
+
+[0m[1m[31merror[0m: Type checking failed.
+exit=1
