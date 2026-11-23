@@ -521,7 +521,7 @@ const DAILY_REPORT_COLUMNS = [
   "Présence confirmée",
   "Vente non réalisée",
   "Vente réalisée",
-  "Total visites physiques",
+  "Total général",
 ];
 const DAILY_REPORT_TEAMS = ["EAU", "YAOURT", "OPLANETE"];
 
