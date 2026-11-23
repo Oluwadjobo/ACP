@@ -10,11 +10,41 @@ export function AdminDashboard() {
   const [promesses, setPromesses] = useState<PromesseAchat[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [visitesError, setVisitesError] = useState<string | null>(null);
+  const [promessesError, setPromessesError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.getDashboard(), api.listVisites(1, 20), api.listPromesses(1, 10)])
-      .then(([s, v, p]) => { setStats(s); setVisites(v.data); setPromesses(p.data); })
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    // The KPI endpoint is the primary dashboard request. Recent visits and
+    // promises are optional widgets: a missing permission on either endpoint
+    // must not prevent the KPI cards from rendering.
+    const loadDashboard = async () => {
+      const dashboardRequest = api.getDashboard()
+        .then((data) => { if (!cancelled) { setStats(data); setStatsError(null); } })
+        .catch((error: unknown) => {
+          if (!cancelled) setStatsError(error instanceof Error ? error.message : "Erreur lors du chargement des indicateurs");
+        });
+
+      const visitesRequest = api.listVisites(1, 20)
+        .then((result) => { if (!cancelled) { setVisites(result.data); setVisitesError(null); } })
+        .catch((error: unknown) => {
+          if (!cancelled) setVisitesError(error instanceof Error ? error.message : "Erreur lors du chargement des visites");
+        });
+
+      const promessesRequest = api.listPromesses(1, 10)
+        .then((result) => { if (!cancelled) { setPromesses(result.data); setPromessesError(null); } })
+        .catch((error: unknown) => {
+          if (!cancelled) setPromessesError(error instanceof Error ? error.message : "Erreur lors du chargement des promesses");
+        });
+
+      await Promise.all([dashboardRequest, visitesRequest, promessesRequest]);
+      if (!cancelled) setLoading(false);
+    };
+
+    void loadDashboard();
+    return () => { cancelled = true; };
   }, []);
 
   const fetchAllVisites = async (): Promise<Visite[]> => {
@@ -93,23 +123,24 @@ export function AdminDashboard() {
     return <div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" /></div>;
   }
 
+  const unavailableValue = stats ? 0 : "—";
   const statCards = [
-    { label: "Commerciaux actifs", value: stats?.totalCommerciaux ?? 0, icon: Users, color: "bg-primary-50 text-primary-700", ring: "ring-primary-100" },
-    { label: "Team Leaders actifs", value: stats?.totalSuperviseurs ?? 0, icon: UserCog, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
-    { label: "Tournées", value: stats?.totalSecteurs ?? 0, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
-    { label: "Total POS équipe", value: stats?.totalPointsVente ?? 0, icon: Store, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
-    { label: "POS actifs", value: stats?.totalPointsVenteActifs ?? 0, icon: CheckCircle2, color: "bg-success-50 text-success-700", ring: "ring-success-100" },
-    { label: "POS désactivés", value: stats?.totalPointsVenteDesactives ?? 0, icon: AlertTriangle, color: "bg-gray-100 text-gray-600", ring: "ring-gray-200" },
-    { label: "POS avec GPS", value: stats?.totalPointsVenteAvecGps ?? 0, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
-    { label: "POS sans GPS", value: stats?.totalPointsVenteSansGps ?? 0, icon: Store, color: "bg-warning-50 text-warning-700", ring: "ring-warning-100" },
-    { label: "Visites aujourd'hui", value: stats?.visitesToday ?? 0, icon: CalendarCheck, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
-    { label: "Ventes réalisées", value: stats?.ventesRealisees ?? 0, icon: TrendingUp, color: "bg-success-50 text-success-600", ring: "ring-success-100" },
-    { label: "Ventes non réalisées", value: stats?.ventesNonRealisees ?? 0, icon: TrendingDown, color: "bg-error-50 text-error-600", ring: "ring-error-100" },
-    { label: "Promesses d'achat", value: stats?.promessesToday ?? 0, icon: Package, color: "bg-warning-50 text-warning-600", ring: "ring-warning-100" },
-    { label: "BL en attente", value: stats?.blEnAttente ?? 0, icon: FileText, color: "bg-warning-50 text-warning-700", ring: "ring-warning-100" },
-    { label: "BL livrés", value: stats?.blLivres ?? 0, icon: FileText, color: "bg-success-50 text-success-700", ring: "ring-success-100" },
-    { label: "Contrôles terrain", value: stats?.controlesToday ?? 0, icon: ClipboardCheck, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
-    { label: "Dernière visite", value: stats?.lastVisite ? formatRelative(stats.lastVisite) : "Aucune", icon: Clock, color: "bg-gray-100 text-gray-600", ring: "ring-gray-200" },
+    { label: "Commerciaux actifs", value: stats?.totalCommerciaux ?? unavailableValue, icon: Users, color: "bg-primary-50 text-primary-700", ring: "ring-primary-100" },
+    { label: "Team Leaders actifs", value: stats?.totalSuperviseurs ?? unavailableValue, icon: UserCog, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
+    { label: "Tournées", value: stats?.totalSecteurs ?? unavailableValue, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
+    { label: "Total POS équipe", value: stats?.totalPointsVente ?? unavailableValue, icon: Store, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
+    { label: "POS actifs", value: stats?.totalPointsVenteActifs ?? unavailableValue, icon: CheckCircle2, color: "bg-success-50 text-success-700", ring: "ring-success-100" },
+    { label: "POS désactivés", value: stats?.totalPointsVenteDesactives ?? unavailableValue, icon: AlertTriangle, color: "bg-gray-100 text-gray-600", ring: "ring-gray-200" },
+    { label: "POS avec GPS", value: stats?.totalPointsVenteAvecGps ?? unavailableValue, icon: MapPin, color: "bg-blue-50 text-blue-700", ring: "ring-blue-100" },
+    { label: "POS sans GPS", value: stats?.totalPointsVenteSansGps ?? unavailableValue, icon: Store, color: "bg-warning-50 text-warning-700", ring: "ring-warning-100" },
+    { label: "Visites aujourd'hui", value: stats?.visitesToday ?? unavailableValue, icon: CalendarCheck, color: "bg-accent-50 text-accent-700", ring: "ring-accent-100" },
+    { label: "Ventes réalisées", value: stats?.ventesRealisees ?? unavailableValue, icon: TrendingUp, color: "bg-success-50 text-success-600", ring: "ring-success-100" },
+    { label: "Ventes non réalisées", value: stats?.ventesNonRealisees ?? unavailableValue, icon: TrendingDown, color: "bg-error-50 text-error-600", ring: "ring-error-100" },
+    { label: "Promesses d'achat", value: stats?.promessesToday ?? unavailableValue, icon: Package, color: "bg-warning-50 text-warning-600", ring: "ring-warning-100" },
+    { label: "BL en attente", value: stats?.blEnAttente ?? unavailableValue, icon: FileText, color: "bg-warning-50 text-warning-700", ring: "ring-warning-100" },
+    { label: "BL livrés", value: stats?.blLivres ?? unavailableValue, icon: FileText, color: "bg-success-50 text-success-700", ring: "ring-success-100" },
+    { label: "Contrôles terrain", value: stats?.controlesToday ?? unavailableValue, icon: ClipboardCheck, color: "bg-secondary-50 text-secondary-700", ring: "ring-secondary-100" },
+    { label: "Dernière visite", value: stats ? (stats.lastVisite ? formatRelative(stats.lastVisite) : "Aucune") : "—", icon: Clock, color: "bg-gray-100 text-gray-600", ring: "ring-gray-200" },
   ];
 
   return (
@@ -118,6 +149,13 @@ export function AdminDashboard() {
         <h1 className="text-2xl font-bold text-gray-900">Tableau de bord</h1>
         <p className="text-gray-500 text-sm mt-1">Vue d'ensemble de l'activité terrain en temps réel</p>
       </div>
+
+      {statsError && (
+        <div role="alert" className="rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm text-error-700">
+          <strong>Les indicateurs du tableau de bord n'ont pas pu être chargés.</strong>
+          <span className="block mt-1">{statsError}</span>
+        </div>
+      )}
 
       {/* Stats cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -134,8 +172,13 @@ export function AdminDashboard() {
         ))}
       </div>
 
-      {/* Promesses d'achat section */}
-      {promesses.length > 0 && (
+      {/* Promesses are a secondary widget and must not block dashboard KPIs. */}
+      {promessesError && (
+        <div role="status" className="rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800">
+          Les promesses récentes ne sont pas disponibles avec les permissions actuelles : {promessesError}
+        </div>
+      )}
+      {!promessesError && promesses.length > 0 && (
         <div className="card">
           <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
             <h2 className="text-lg font-bold text-gray-900">Promesses d'achat récentes</h2>
@@ -176,14 +219,18 @@ export function AdminDashboard() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-bold text-gray-900">Dernières visites</h2>
-            <span className="badge bg-gray-100 text-gray-600">{visites.length} récentes</span>
+            <span className="badge bg-gray-100 text-gray-600">{visitesError ? "Indisponibles" : `${visites.length} récentes`}</span>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={exportCSV} disabled={exporting || visites.length === 0} className="btn-secondary text-xs py-2 px-3"><Download size={14} />{exporting ? "Export..." : "CSV"}</button>
             <button onClick={exportExcel} disabled={exporting || visites.length === 0} className="btn-secondary text-xs py-2 px-3"><FileSpreadsheet size={14} />{exporting ? "Export..." : "Excel"}</button>
           </div>
         </div>
-        {visites.length === 0 ? (
+        {visitesError ? (
+          <div role="status" className="px-6 py-10 text-center text-sm text-warning-800 bg-warning-50">
+            Les dernières visites ne sont pas accessibles : {visitesError}
+          </div>
+        ) : visites.length === 0 ? (
           <div className="px-6 py-16 text-center">
             <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3"><CalendarCheck size={26} className="text-gray-400" /></div>
             <p className="text-gray-500 text-sm">Aucune visite enregistrée pour le moment</p>
