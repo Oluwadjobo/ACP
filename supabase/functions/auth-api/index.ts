@@ -905,6 +905,18 @@ async function readDailyReportBody(req: Request): Promise<Record<string, unknown
   }
 }
 
+async function computeSourceFingerprint(teamId: string, reportDate: string): Promise<string | null> {
+  const { data, error } = await supabase.rpc("compute_daily_report_fingerprint", {
+    p_team_id: teamId,
+    p_report_date: reportDate,
+  });
+  if (error) {
+    console.error("fingerprint computation failed", { teamId, reportDate, error });
+    return null;
+  }
+  return typeof data === "string" ? data : null;
+}
+
 // ============ HIERARCHY HELPERS (tenant-aware) ============
 
 async function getCommercialSecteur(commercialId: string, teamId: string | null): Promise<{ secteur_id: string | null; superviseur_id: string | null }> {
@@ -1407,17 +1419,32 @@ async function handleRoute(req: Request): Promise<Response> {
         // an unnecessary new report version just to display phone-call metrics.
         // If enrichment fails, the physical report is still returned so the
         // admin can read it — phone indicators simply remain absent.
+        let snapshotData = data as Record<string, unknown>;
         try {
-          const enrichedSnapshot = await ensureDailyReportPhoneDataArchived(
+          snapshotData = await ensureDailyReportPhoneDataArchived(
             teamId, date, teamName, data as Record<string, unknown>,
           );
-          return { data: enrichedSnapshot, error: null };
         } catch (enrichmentError) {
           console.error("daily report phone enrichment failed on read", {
             snapshotId: data.id, teamId, date, error: enrichmentError,
           });
-          return { data: data as Record<string, unknown>, error: null };
         }
+
+        // Freshness check: compare stored fingerprint with current source state.
+        // null fingerprint = snapshot predates fingerprinting (unknown freshness).
+        const storedFingerprint = typeof data.source_fingerprint === "string" ? data.source_fingerprint : null;
+        if (storedFingerprint) {
+          try {
+            const currentFingerprint = await computeSourceFingerprint(teamId, date);
+            snapshotData = { ...snapshotData, _stale: currentFingerprint !== null && currentFingerprint !== storedFingerprint };
+          } catch {
+            snapshotData = { ...snapshotData, _stale: false };
+          }
+        } else {
+          snapshotData = { ...snapshotData, _stale: false };
+        }
+
+        return { data: snapshotData, error: null };
       };
       const compareComment = (
         first: Record<string, unknown> | null,
@@ -1461,14 +1488,16 @@ async function handleRoute(req: Request): Promise<Response> {
         if (!team) return jsonError(404, "Équipe introuvable");
         const { data: snapshot, error } = await loadSnapshot(teamId, date, team.name);
         if (error) return jsonError(500, "Impossible de charger l'instantané");
-        if (!snapshot) return jsonResponse({ snapshot: null, audit: [] });
+        if (!snapshot) return jsonResponse({ snapshot: null, audit: [], stale: false });
+        const stale = snapshot._stale === true;
+        const { _stale, ...snapshotWithoutFlag } = snapshot;
         const { data: audit, error: auditError } = await fetchAllRows((from, to) => supabase.from("daily_report_regeneration_audit")
           .select("id, previous_version, replacement_version, previous_snapshot, replacement_snapshot, regenerated_at, regenerated_by, regenerated_by_name", { count: "exact" })
           .eq("report_id", snapshot.id)
           .order("replacement_version", { ascending: false })
           .range(from, to));
         if (auditError) return jsonError(500, "Impossible de charger l'historique des régénérations");
-        return jsonResponse({ snapshot, audit: audit || [] });
+        return jsonResponse({ snapshot: snapshotWithoutFlag, audit: audit || [], stale });
       }
 
       if (path === "/daily-reports/compare" && method === "GET") {
@@ -1526,6 +1555,7 @@ async function handleRoute(req: Request): Promise<Response> {
           p_actor_admin_id: session.user_id,
         });
         if (error) return dailyReportRpcError(error);
+        const sourceFingerprint = await computeSourceFingerprint(teamId, date);
         const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
           .select("*")
           .eq("id", snapshotId)
@@ -1538,7 +1568,15 @@ async function handleRoute(req: Request): Promise<Response> {
           console.error("daily report phone enrichment failed", error);
           return jsonError(500, error instanceof Error ? error.message : "Impossible d'archiver les indicateurs téléphoniques");
         }
-        return jsonResponse({ ...snapshot, report_data: enrichedReportData }, 201);
+        const { data: fingerprintUpdate, error: fingerprintError } = await supabase.from("daily_report_snapshots")
+          .update({ source_fingerprint: sourceFingerprint })
+          .eq("id", String(snapshotId))
+          .select("id")
+          .maybeSingle();
+        if (fingerprintError || !fingerprintUpdate) {
+          console.error("fingerprint persistence failed", fingerprintError);
+        }
+        return jsonResponse({ ...snapshot, report_data: enrichedReportData, source_fingerprint: sourceFingerprint }, 201);
       }
 
       if (path === "/daily-reports/regenerate" && method === "POST") {
@@ -1577,11 +1615,18 @@ async function handleRoute(req: Request): Promise<Response> {
           p_confirmed: true,
         });
         if (error) return dailyReportRpcError(error);
+        const sourceFingerprint = await computeSourceFingerprint(teamId, date);
         const { data: snapshot, error: snapshotError } = await supabase.from("daily_report_snapshots")
           .select("*")
           .eq("id", snapshotId)
           .single();
         if (snapshotError || !snapshot) return jsonError(500, "L'instantané a été régénéré mais ne peut pas être relu");
+        const { error: fingerprintUpdateError } = await supabase.from("daily_report_snapshots")
+          .update({ source_fingerprint: sourceFingerprint })
+          .eq("id", String(snapshotId));
+        if (fingerprintUpdateError) {
+          console.error("fingerprint persistence failed after regenerate", fingerprintUpdateError);
+        }
         let enrichedReportData: Record<string, unknown>;
         try {
           enrichedReportData = await saveDailyReportPhoneData(String(snapshotId), snapshot.report_data as Record<string, unknown>, telephoneData, team.name, date);

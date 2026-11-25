@@ -199,6 +199,7 @@ export function AdminDailyReports() {
   const [dateB, setDateB] = useState(today);
   const [snapshot, setSnapshot] = useState<DailyReportSnapshot | null>(null);
   const [audit, setAudit] = useState<DailyReportAuditEntry[]>([]);
+  const [stale, setStale] = useState(false);
   const [comparison, setComparison] = useState<{
     date_a: { date: string; snapshot: DailyReportSnapshot | null };
     date_b: { date: string; snapshot: DailyReportSnapshot | null };
@@ -237,12 +238,14 @@ export function AdminDailyReports() {
       if (requestId === requestSequence.current) {
         setSnapshot(result.snapshot);
         setAudit(result.audit);
+        setStale(result.stale === true);
       }
     } catch (cause) {
       if (requestId === requestSequence.current) {
         setError((cause as Error).message || "Impossible de charger l'instantané");
         setSnapshot(null);
         setAudit([]);
+        setStale(false);
       }
     } finally {
       if (requestId === requestSequence.current) setLoadingReport(false);
@@ -311,7 +314,13 @@ export function AdminDailyReports() {
       setNotice(`Rapport régénéré. La version ${snapshot.version} a été archivée.`);
       await loadDaily();
     } catch (cause) {
-      setError((cause as Error).message || "La régénération a échoué");
+      const message = (cause as Error).message || "La régénération a échoué";
+      if (message.includes("a changé") || message.includes("Rechargez")) {
+        setNotice("L'instantané a été modifié par une autre action. Rechargement en cours.");
+        await loadDaily();
+      } else {
+        setError(message);
+      }
     } finally {
       setBusy(false);
     }
@@ -453,6 +462,20 @@ export function AdminDailyReports() {
               </div>
             </div>
             <SnapshotSummary snapshot={snapshot} />
+            {stale && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={20} className="mt-0.5 shrink-0 text-orange-600" />
+                  <div>
+                    <p className="font-semibold text-orange-900">Rapport potentiellement obsolète</p>
+                    <p className="mt-1 text-sm text-orange-800">Des visites ou des appels téléphoniques ont été enregistrés après la dernière génération. Régénérez l'instantané pour obtenir les indicateurs à jour.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => void regenerate()} disabled={busy} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+                  <RefreshCw size={16} /> {busy ? "Régénération…" : "Régénérer maintenant"}
+                </button>
+              </div>
+            )}
             <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
               <h3 className="text-sm font-semibold text-blue-950">Commentaire journalier</h3>
               <p className="mt-1 text-sm leading-6 text-blue-900">{snapshot.analytical_comment}</p>

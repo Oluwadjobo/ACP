@@ -301,7 +301,7 @@ export const api = {
 
   getDailyReportSnapshot: (teamId: string, reportDate: string) => {
     const qs = new URLSearchParams({ team_id: teamId, report_date: reportDate });
-    return apiRequest<{ snapshot: import("@/types").DailyReportSnapshot | null; audit: import("@/types").DailyReportAuditEntry[] }>(
+    return apiRequest<{ snapshot: import("@/types").DailyReportSnapshot | null; audit: import("@/types").DailyReportAuditEntry[]; stale: boolean }>(
       `/daily-reports/snapshot?${qs.toString()}`,
       { method: "GET" }
     );

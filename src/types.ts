@@ -76,6 +76,7 @@ export interface DailyReportSnapshot {
   generated_at: string;
   generated_by: string;
   generated_by_name: string;
+  source_fingerprint?: string | null;
 }
 
 export interface DailyReportAuditEntry {
