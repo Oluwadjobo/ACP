@@ -4946,12 +4946,14 @@ function getBearerToken(req: Request): string | null {
   return auth.slice(7).trim();
 }
 
+const noStoreHeaders = { "Cache-Control": "no-store" };
+
 function jsonResponse(data: unknown, status = 200, additionalHeaders: HeadersInit = {}): Response {
-  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, "Content-Type": "application/json", ...additionalHeaders } });
+  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, "Content-Type": "application/json", ...noStoreHeaders, ...additionalHeaders } });
 }
 
 function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: message }), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  return new Response(JSON.stringify({ error: message }), { status, headers: { ...corsHeaders, "Content-Type": "application/json", ...noStoreHeaders } });
 }
 
 // ============ SERVER ============

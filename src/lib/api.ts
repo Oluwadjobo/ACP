@@ -29,6 +29,7 @@ async function apiRequestWithHeaders<T>(
   }
 
   const response = await fetch(`${FUNCTION_URL}${path}`, {
+    cache: "no-store",
     ...options,
     headers,
   });
